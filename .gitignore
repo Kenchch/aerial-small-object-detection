@@ -1,0 +1,49 @@
+﻿# NOTE: gitignore has no inline comments -- '#' only starts a comment at the
+# beginning of a line. Keep every comment on its own line.
+
+# Datasets are downloaded by Ultralytics on first run (see README).
+datasets/
+*.cache
+
+# Checkpoints: large and regenerable from the config. Metrics and plots kept.
+runs/**/weights/
+*.pt
+*.onnx
+*.engine
+
+# Transient val output -- one directory per benchmark sweep step.
+runs/detect/
+
+# Pipeline smoke test.
+runs/smoketest/
+
+# Augmentation mosaics, ~0.5 MB each.
+train_batch*.jpg
+
+# Raw console logs (ANSI progress-bar spam), pid files, checkpoint backups.
+*.log
+*.err
+*.pid
+*_backup.csv
+*_backup.pt
+
+# Local working notes -- handoff state and personal context, not for readers.
+PROGRESS.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# Generated media. The GIF is committed for the README; the source clips are
+# regenerable from make_demo_clip.py + track.py and are too large for git.
+reports/*.mp4
+reports/_frame_check.png
