@@ -150,11 +150,12 @@ figure would suggest. That distinction matters for short-clip batch processing
 versus a long-running stream.
 
 Association quality: 306 unique tracks, mean length 10.3 frames, 26.1 %
-single-frame ("fragmented") tracks. ByteTrack's internal id counter reached
-9,525 while only 306 ids were ever confirmed — it increments for every
-*tentative* track, including ones spawned by detections that never get
-confirmed, so anything keying on track id downstream (a counter, a database)
-inherits the larger number.
+single-frame ("fragmented") tracks. 306 distinct track ids appear in the
+output; the largest is 9,525. At least 9,219 id values were therefore
+consumed without ever producing a drawn box — ByteTrack's internal counter
+increments for every *tentative* track, including ones spawned by detections
+that never get confirmed, so anything keying on track id downstream (a
+counter, a database) inherits the larger number.
 
 ---
 
