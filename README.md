@@ -283,8 +283,10 @@ docker run --gpus all -it -v ${PWD}/datasets:/workspace/datasets aerial-detectio
 ## Usage
 
 ```bash
-# Train (1024px, chosen from the label-size distribution above)
-python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --name n_1024
+# Train (1024px, chosen from the label-size distribution above).
+# --batch 6, not the default 16: at 1024px, activation memory per image is
+# high enough that batch 16 does not fit in 8 GB VRAM.
+python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --batch 6 --name n_1024
 
 # Per-class metrics + ground-truth object-size distribution
 python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024

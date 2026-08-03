@@ -35,13 +35,16 @@ def parse_args() -> argparse.Namespace:
                         "frequently <20px, so the YOLO default of 640 discards "
                         "most of the small-object signal.")
     p.add_argument("--epochs", type=int, default=50)
-    p.add_argument("--batch", type=int, default=16,
+    p.add_argument("--batch", type=int, default=6,
                    help="Set explicitly rather than using AutoBatch (-1). "
                         "AutoBatch profiles a forward/backward pass and picks a "
                         "size targeting ~60%% VRAM, but VisDrone images carry "
                         "~85 boxes each and the profiler over-weights the label "
                         "assignment cost -- on this 8 GB card it chose batch=4, "
-                        "which left the GPU at 37%% utilisation and starved.")
+                        "which left the GPU at 37%% utilisation and starved. "
+                        "6 is what the recorded run actually used at 1024px; "
+                        "activation memory scales with pixel count, so a batch "
+                        "that fits at a lower --imgsz will not fit here.")
     p.add_argument("--cache", default="disk", choices=["disk", "ram", "False"],
                    help="VisDrone frames are ~2000x1500 JPEGs; decoding them "
                         "every epoch makes the dataloader the bottleneck, not "
