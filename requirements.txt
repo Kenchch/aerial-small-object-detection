@@ -1,7 +1,9 @@
 # torch/torchvision need the cu124 index for a GPU build (see README "Setup"):
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-torch
-torchvision
+# Pinned to what was actually tested; an unpinned "torch" here would let pip
+# resolve a newer release with no guarantee it still supports CUDA 12.4.
+torch==2.6.0
+torchvision==0.21.0
 
 ultralytics
 onnx

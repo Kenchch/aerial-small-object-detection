@@ -12,7 +12,7 @@ save_period: -1
 cache: disk
 device: '0'
 workers: 8
-project: D:\fcc\aerial-detection\runs
+project: runs
 name: n_1024
 exist_ok: true
 pretrained: true
@@ -113,4 +113,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: tracktrack.yaml
-save_dir: D:\fcc\aerial-detection\runs\n_1024
+save_dir: runs\n_1024
