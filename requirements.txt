@@ -1,0 +1,13 @@
+# torch/torchvision need the cu124 index for a GPU build (see README "Setup"):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+torch
+torchvision
+
+ultralytics
+onnx
+onnxslim
+onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
+
+opencv-python
+numpy
+PyYAML
