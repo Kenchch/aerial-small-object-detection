@@ -15,7 +15,9 @@ chosen, rather than assumed.
 [VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) is drone-captured
 imagery across 10 classes (pedestrian, car, van, truck, bus, motor, …).
 
-- **6,471** training / **548** validation frames, source images ~2000×1500.
+- **6,471** training / **548** validation frames. Resolutions are mixed, not
+  uniform: the val split is entirely 16:9 (1360×765, 960×540 or 1920×1080);
+  train mixes those with 4:3 frames as large as 2000×1500.
 - **38,759** annotated boxes in the validation split alone — a mean of **~71
   objects per frame**, against roughly 7 for COCO.
 
@@ -36,10 +38,16 @@ fraction of frame covered — no need to open the images.
 | medium — 0.25–1 % | 11.8 % |
 | large — >1 % | 2.3 % |
 
-The median box covers 0.055 % of the frame — a **15 px** object at the YOLO
-default of 640 px input, or **24 px** at 1024 px. Six out of seven objects in
-this dataset are in the regime where downscaling destroys them, which is why
-this trains at 1024px rather than the default.
+The median box covers 0.055 % of the frame. Converting that to a pixel size
+needs the source image's actual dimensions, not just the target resolution —
+YOLO letterboxes (scales both axes by the same factor, padding the short
+side) rather than stretching to a square, so a naive `sqrt(area) * imgsz`
+overstates the box's true rendered size whenever the source isn't already
+square. Computed per-image from the val split's real dimensions (100% 16:9
+here): the median box is a **11 px** object at the YOLO default of 640 px
+input, or **18 px** at 1024 px. Six out of seven objects in this dataset are
+in the regime where downscaling destroys them, which is why this trains at
+1024px rather than the default.
 
 ---
 
@@ -130,22 +138,22 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 1.01 ms | 1.56 ms |
-| detect + track | 31.70 ms | **98.00 ms** |
-| annotate | 3.08 ms | 3.51 ms |
-| encode | 2.34 ms | 2.45 ms |
-| **accounted** | | **105.52 ms** |
-| **wall per frame** | | **105.58 ms** |
+| decode | 0.99 ms | 1.18 ms |
+| detect + track | 34.73 ms | **99.68 ms** |
+| annotate | 3.21 ms | 3.70 ms |
+| encode | 2.41 ms | 2.93 ms |
+| **accounted** | | **107.49 ms** |
+| **wall per frame** | | **107.56 ms** |
 
 Coverage 99.9 % — the profile accounts for nearly all of wall-clock time.
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,971 ms — 188× the steady-state 31.7 ms**, from CUDA context
+frame costs **5,900 ms — 170× the steady-state 34.7 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (98.00 ms) and the median (31.70 ms), which is why this
-clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
+gap between the mean (99.68 ms) and the median (34.73 ms), which is why this
+clip's end-to-end throughput (**9.3 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.13 ms/frame → 26.2 FPS**, not the ~31 FPS a detect+track-only
+— which gives **41.34 ms/frame → 24.2 FPS**, not the ~29 FPS a detect+track-only
 figure would suggest. That distinction matters for short-clip batch processing
 versus a long-running stream.
 
@@ -181,8 +189,9 @@ here uses `--batch 6` explicitly instead of AutoBatch.
 
 ### JPEG decode was the real bottleneck
 
-Even at the correct batch size, decoding 2000×1500 JPEGs every epoch — 6,471
-of them — kept the dataloader, not the GPU, as the limiting factor.
+Even at the correct batch size, decoding full-resolution JPEGs (up to
+2000×1500) every epoch — 6,471 of them — kept the dataloader, not the GPU,
+as the limiting factor.
 `cache='disk'` pre-decodes each image to `.npy` once and reads that back on
 subsequent epochs, taking epochs from ~5 minutes to ~60 seconds.
 
@@ -221,13 +230,14 @@ backend is worse than one that crashes.
 
 ### Augmentation choices
 
-Defaults are tuned for COCO — ground-level, object-centric photography. Two
-deviations for nadir aerial imagery: `flipud=0.5`, because an overhead scene
-has no canonical "up" so vertical flips are label-preserving here; wider scale
-jitter (`scale=0.5`), because apparent object size is the primary axis of
-variation in this dataset. Mosaic is disabled for the final 10 epochs
-(`close_mosaic=10`) since it distorts the scale statistics the model needs to
-converge on.
+Checked Ultralytics' own `cfg/default.yaml` rather than assuming: `fliplr=0.5`,
+`scale=0.5`, `mosaic=1.0` and `close_mosaic=10` are already the defaults, and
+they suit this dataset as-is, so training does not override them. There is
+exactly **one** real deviation: `flipud` defaults to `0.0` (a vertical flip
+would ruin the labels on a normal, ground-level photo), but VisDrone is shot
+nadir — straight down — so there is no canonical "up" and a vertical flip is
+label-preserving here. `flipud=0.5` is set explicitly for that reason; nothing
+else is.
 
 ---
 
@@ -243,6 +253,13 @@ truth track ids exist to score association against.
 
 **Latency figures come from a power-limited laptop GPU** (RTX 2070 Max-Q).
 The relative ordering of backends transfers; the absolute milliseconds do not.
+
+**Training was epoch-budget-limited, not converged.** `best.pt` is epoch 50 —
+the last epoch — and mAP50-95 was still rising when the budget ran out
+(+0.0078 over the final 10 epochs, +0.0030 over the final 5, in
+`runs/n_1024/results.csv`). `--patience 15` never triggered. The headline
+mAP50/mAP50-95 figures above are a lower bound on what this configuration can
+reach, not a converged result.
 
 ---
 
