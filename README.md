@@ -167,11 +167,17 @@ Findings from profiling and cross-checking real runs.
 
 Ultralytics' `batch=-1` profiles a forward/backward pass and picks a batch
 size targeting ~60% of VRAM. On VisDrone it selected **batch=4**, and the GPU
-sat at 37% utilisation drawing 42 W with 2.4 of 8 GB in use. The profiler
+sat at 37% utilisation drawing 42 W with 2.4 of 8 GB in use — observed at
+640px during an earlier configuration of this project, before it was
+simplified to the single 1024px run recorded in this repo. The profiler
 over-weights peak memory during label assignment, which scales with box count
-— and at ~85 boxes/image VisDrone is close to a worst case for that heuristic.
-Fixing the batch to a size chosen from steady-state usage (1.16 GB) rather
-than the profiler's estimate took utilisation to 85%.
+— and at ~53 boxes/image on the training split (343,205 boxes / 6,471 images)
+VisDrone is close to a worst case for that heuristic. Fixing the batch to a
+size chosen from measured
+steady-state usage (1.16 GB, at that same 640px configuration) rather than
+the profiler's estimate took utilisation to 85%. The same reasoning — trust
+measured steady-state VRAM over AutoBatch's estimate — is why the 1024px run
+here uses `--batch 6` explicitly instead of AutoBatch.
 
 ### JPEG decode was the real bottleneck
 

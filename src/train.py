@@ -38,9 +38,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch", type=int, default=6,
                    help="Set explicitly rather than using AutoBatch (-1). "
                         "AutoBatch profiles a forward/backward pass and picks a "
-                        "size targeting ~60%% VRAM, but VisDrone images carry "
-                        "~85 boxes each and the profiler over-weights the label "
-                        "assignment cost -- on this 8 GB card it chose batch=4, "
+                        "size targeting ~60%% VRAM, but VisDrone's training split "
+                        "carries ~53 boxes/image (343,205 boxes / 6,471 images) "
+                        "and the profiler over-weights the label assignment cost "
+                        "-- on this 8 GB card it chose batch=4, "
                         "which left the GPU at 37%% utilisation and starved. "
                         "6 is what the recorded run actually used at 1024px; "
                         "activation memory scales with pixel count, so a batch "
