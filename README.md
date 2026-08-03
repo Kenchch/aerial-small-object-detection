@@ -51,9 +51,10 @@ YOLO11n, 1024px, 50 epochs, 197.6 min on an RTX 2070 Max-Q.
 validation (`runs/n_1024/results.csv`, the pass used to select the checkpoint).
 `src/benchmark.py` re-validates independently to pair accuracy with its own
 latency numbers below and gets a very slightly different figure — mAP50
-0.3748, mAP50-95 0.2216, in `reports/benchmark.json` — from ordinary
-run-to-run validation variance between two separate `.val()` calls, not a
-different model or dataset.
+0.3748, mAP50-95 0.2216, in `reports/benchmark.json`. The in-training pass
+runs under AMP (`amp: true` in `runs/n_1024/args.yaml`, so fp16) and the
+standalone one in fp32, so the two are not numerically identical. Same
+weights, same split.
 
 Per-class breakdown, sorted by difficulty, shows why the aggregate number is
 not the interesting one:
