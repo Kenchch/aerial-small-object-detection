@@ -61,7 +61,7 @@ def per_class_table(weights: Path, data: str, imgsz: int) -> None:
     print(f"worst class: {worst[0]}  (mAP50-95 {worst[4]:.3f})")
 
 
-def label_size_distribution(data: str, split: str = "val") -> None:
+def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> None:
     """Box-area distribution of the ground-truth labels, as % of frame area.
 
     YOLO labels are normalised (w, h in [0,1]), so w*h is directly the
@@ -106,8 +106,10 @@ def label_size_distribution(data: str, split: str = "val") -> None:
     print(f"  medium (0.25-1%)         : {medium:5.1f} %")
     print(f"  large  (>1%)             : {large:5.1f} %")
     print(f"  median box area          : {np.median(areas) * 100:.4f} % of frame")
-    print(f"\n  -> a box at the median covers ~{np.sqrt(np.median(areas)) * 640:.1f} px "
-          f"on a 640px input, and ~{np.sqrt(np.median(areas)) * 1280:.1f} px at 1280.")
+    side = np.sqrt(np.median(areas))
+    print(f"\n  -> a box at the median covers ~{side * 640:.1f} px on a 640px "
+          f"input (the YOLO default), and ~{side * imgsz:.1f} px at {imgsz}px "
+          f"(this project's chosen resolution).")
     print("     This is the argument for training at higher resolution.")
 
     names = cfg.get("names", {})
@@ -126,7 +128,7 @@ def main() -> None:
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     per_class_table(args.weights, args.data, args.imgsz)
-    label_size_distribution(args.data, args.split)
+    label_size_distribution(args.data, args.split, args.imgsz)
 
 
 if __name__ == "__main__":
