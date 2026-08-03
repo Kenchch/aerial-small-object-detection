@@ -37,7 +37,7 @@ fraction of frame covered — no need to open the images.
 | large — >1 % | 2.3 % |
 
 The median box covers 0.055 % of the frame — a **15 px** object at the YOLO
-default of 640 px input, or **30 px** at 1024 px. Six out of seven objects in
+default of 640 px input, or **24 px** at 1024 px. Six out of seven objects in
 this dataset are in the regime where downscaling destroys them, which is why
 this trains at 1024px rather than the default.
 
@@ -47,7 +47,13 @@ this trains at 1024px rather than the default.
 
 YOLO11n, 1024px, 50 epochs, 197.6 min on an RTX 2070 Max-Q.
 
-**mAP50 0.373, mAP50-95 0.221.**
+**mAP50 0.373, mAP50-95 0.221.** This is the training run's own final
+validation (`runs/n_1024/results.csv`, the pass used to select the checkpoint).
+`src/benchmark.py` re-validates independently to pair accuracy with its own
+latency numbers below and gets a very slightly different figure — mAP50
+0.3748, mAP50-95 0.2216, in `reports/benchmark.json` — from ordinary
+run-to-run validation variance between two separate `.val()` calls, not a
+different model or dataset.
 
 Per-class breakdown, sorted by difficulty, shows why the aggregate number is
 not the interesting one:
@@ -135,9 +141,12 @@ Median and mean disagree sharply on one stage because of one frame: the first
 frame costs **5,971 ms — 188× the steady-state 31.7 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
 gap between the mean (98.00 ms) and the median (31.70 ms), which is why this
-clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate
-(**~31.5 FPS**, from the 31.7 ms median) — a distinction that matters for
-short-clip batch processing versus a long-running stream.
+clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
+Steady state has to sum every stage's median, not just the largest one — decode,
+annotate and encode still happen every frame once the cold start is behind you
+— which gives **38.13 ms/frame → 26.2 FPS**, not the ~31 FPS a detect+track-only
+figure would suggest. That distinction matters for short-clip batch processing
+versus a long-running stream.
 
 Association quality: 306 unique tracks, mean length 10.3 frames, 26.1 %
 single-frame ("fragmented") tracks. ByteTrack's internal id counter reached
