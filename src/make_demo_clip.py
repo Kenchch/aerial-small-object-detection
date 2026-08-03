@@ -84,6 +84,13 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(str(args.out), cv2.VideoWriter_fourcc(*"mp4v"),
                              args.fps, (ow, oh))
+    # An unopened writer makes write() a silent no-op -- this script would
+    # otherwise print "wrote ... (N frames)" and exit 0 with no output file,
+    # and the failure would only surface in track.py, the next command in
+    # the README's tracking walkthrough, pointing at the wrong script.
+    if not writer.isOpened():
+        raise SystemExit(f"cannot open VideoWriter for {args.out} "
+                          f"(mp4v codec unavailable in this OpenCV build?)")
 
     max_dx, max_dy = W - cw, H - ch
     for i in range(args.frames):

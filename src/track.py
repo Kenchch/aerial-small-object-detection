@@ -101,6 +101,13 @@ def main() -> None:
     if not args.no_write:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+        # Without this check, a missing mp4v/FFmpeg codec makes write() a
+        # silent no-op: the script still exits 0 and prints a frame count,
+        # and the failure only surfaces later, in whatever reads the (empty
+        # or missing) output file -- pointing at the wrong script entirely.
+        if not writer.isOpened():
+            raise SystemExit(f"cannot open VideoWriter for {args.out} "
+                              f"(mp4v codec unavailable in this OpenCV build?)")
 
     t_infer, t_draw, t_write, t_decode = [], [], [], []
     track_frames = defaultdict(int)      # track id -> frames seen
@@ -213,7 +220,11 @@ def main() -> None:
         "tracks": {
             "unique_ids": len(track_frames),
             "highest_id_issued": max_id,
-            "id_churn_ratio": round(max_id / len(track_frames), 1) if track_frames else 0,
+            # Tentative (never-confirmed) ids per confirmed one -- NOT
+            # max_id / confirmed, which counts the confirmed ids themselves
+            # in the numerator too and would overstate this by exactly 1x.
+            "id_churn_ratio": round((max_id - len(track_frames)) / len(track_frames), 1)
+                              if track_frames else 0,
             "mean_track_len_frames": round(sum(lengths) / len(lengths), 1) if lengths else 0,
             "max_track_len_frames": max(lengths) if lengths else 0,
             "single_frame_tracks": fragments,

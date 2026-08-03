@@ -124,7 +124,11 @@ def run_one(weights: Path, imgsz: int, data: str) -> dict:
     row["pytorch_cuda"] = bench_pytorch(weights, imgsz, "cuda")
     print(f"  PyTorch  CUDA : {row['pytorch_cuda']}")
 
-    onnx_path = weights.parent / f"best_{imgsz}.onnx"
+    # weights.stem, not a hardcoded "best": otherwise running against last.pt
+    # after best.pt at the same imgsz finds best_<imgsz>.onnx already on disk,
+    # skips export, and silently benchmarks best.pt's latency against
+    # last.pt's freshly computed accuracy in the same output row.
+    onnx_path = weights.parent / f"{weights.stem}_{imgsz}.onnx"
     if not onnx_path.exists():
         exported = YOLO(str(weights)).export(
             format="onnx", imgsz=imgsz, opset=13,

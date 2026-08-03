@@ -22,6 +22,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
+import cv2
 import numpy as np
 import yaml
 from ultralytics import YOLO
@@ -62,10 +63,23 @@ def per_class_table(weights: Path, data: str, imgsz: int) -> None:
 
 
 def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> None:
-    """Box-area distribution of the ground-truth labels, as % of frame area.
+    """Box-area distribution of the ground-truth labels, as % of frame area,
+    plus the true pixel size those boxes end up at once YOLO resizes the image.
 
-    YOLO labels are normalised (w, h in [0,1]), so w*h is directly the
-    fraction of the image the box covers -- no need to read the images.
+    The frame-area share (w*h, both normalised by the image's own width/height
+    independently) needs nothing but the label file -- that part of the
+    original version was already correct.
+
+    Converting area share to a pixel size is not: it is tempting to multiply
+    by imgsz directly, but Ultralytics *letterboxes* rather than stretching --
+    it scales the image uniformly so its long side matches imgsz, then pads
+    the short side, rather than resizing width and height independently to
+    imgsz x imgsz. A box's true rendered size therefore depends on its
+    source image's aspect ratio, which is not uniform here: VisDrone's val
+    split is 100% 16:9 (checked directly), but train mixes 4:3 and 16:9. So
+    this reads each label's actual source image to get its real (W, H) and
+    applies the correct per-image letterbox scale, rather than assuming one
+    aspect ratio for the whole split.
     """
     data_yaml = Path(SETTINGS["datasets_dir"]) / data if not Path(data).exists() else Path(data)
     # Ultralytics resolves the yaml itself; locate it via its own config dir.
@@ -78,19 +92,42 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
 
     root = Path(SETTINGS["datasets_dir"]) / cfg["path"]
     label_dir = root / cfg[split].replace("images", "labels")
+    image_dir = root / cfg[split]
     files = list(label_dir.glob("*.txt"))
     if not files:
         print(f"\n[warn] no label files under {label_dir}")
         return
 
     areas, cls_counter = [], Counter()
+    px_area_640, px_area_imgsz = [], []
+    dims_seen = Counter()
     for f in files:
+        img_path = next(
+            (image_dir / f"{f.stem}{ext}" for ext in (".jpg", ".jpeg", ".png")
+             if (image_dir / f"{f.stem}{ext}").exists()),
+            None,
+        )
+        W = H = None
+        if img_path is not None:
+            img = cv2.imread(str(img_path))
+            if img is not None:
+                H, W = img.shape[:2]
+                dims_seen[(W, H)] += 1
+
         for line in f.read_text().splitlines():
             parts = line.split()
             if len(parts) < 5:
                 continue
             cls_counter[int(parts[0])] += 1
-            areas.append(float(parts[3]) * float(parts[4]))
+            w_n, h_n = float(parts[3]), float(parts[4])
+            areas.append(w_n * h_n)
+            if W and H:
+                # Letterbox scales both axes by the SAME factor (long side ->
+                # target), unlike stretching to a imgsz x imgsz square.
+                s640 = 640 / max(W, H)
+                s_imgsz = imgsz / max(W, H)
+                px_area_640.append((w_n * W * s640) * (h_n * H * s640))
+                px_area_imgsz.append((w_n * W * s_imgsz) * (h_n * H * s_imgsz))
 
     areas = np.asarray(areas)
     # COCO's convention: "small" is <32x32 px. On a 640px frame that is
@@ -106,10 +143,20 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     print(f"  medium (0.25-1%)         : {medium:5.1f} %")
     print(f"  large  (>1%)             : {large:5.1f} %")
     print(f"  median box area          : {np.median(areas) * 100:.4f} % of frame")
-    side = np.sqrt(np.median(areas))
-    print(f"\n  -> a box at the median covers ~{side * 640:.1f} px on a 640px "
-          f"input (the YOLO default), and ~{side * imgsz:.1f} px at {imgsz}px "
-          f"(this project's chosen resolution).")
+
+    if px_area_640 and px_area_imgsz:
+        side640 = np.sqrt(np.median(px_area_640))
+        side_imgsz = np.sqrt(np.median(px_area_imgsz))
+        print(f"\n  source image dimensions seen (w x h : count):")
+        for (w, h), n in dims_seen.most_common():
+            print(f"    {w}x{h}  ({n})")
+        print(f"\n  -> under YOLO's letterbox resize (aspect ratio preserved, "
+              f"not stretched), a box\n     at the median covers ~{side640:.1f} px "
+              f"on a 640px input (the YOLO default),\n     and ~{side_imgsz:.1f} px "
+              f"at {imgsz}px (this project's chosen resolution).")
+    else:
+        print("\n  [warn] could not resolve source images -- skipping pixel "
+              "conversion (frame-area stats above are unaffected).")
     print("     This is the argument for training at higher resolution.")
 
     names = cfg.get("names", {})

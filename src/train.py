@@ -56,8 +56,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="0")
     p.add_argument("--name", required=True, help="Run name under runs/")
     p.add_argument("--patience", type=int, default=15,
-                   help="Early-stop patience on fitness. VisDrone plateaus well "
-                        "before 50 epochs at low resolution.")
+                   help="Early-stop patience on fitness. Untested at 1024px: "
+                        "the recorded run never triggered this and was still "
+                        "improving at epoch 50 (see README, 'What this does "
+                        "not establish'), so 50 epochs is a budget here, not "
+                        "a verified plateau.")
     p.add_argument("--seed", type=int, default=0, help="Fixed for reproducibility.")
     p.add_argument("--resume", action="store_true",
                    help="Resume an interrupted run from runs/<name>/weights/last.pt. "
@@ -97,19 +100,14 @@ def main() -> None:
         name=args.name,
         exist_ok=True,
         # --- Augmentation -------------------------------------------------
-        # Defaults are tuned for COCO (ground-level, object-centric). Two
-        # adjustments matter for nadir aerial imagery:
-        #   fliplr/flipud: aerial scenes have no canonical "up", so vertical
-        #     flips are label-preserving here whereas they are not on COCO.
-        #   scale: wider scale jitter helps the model see the same vehicle at
-        #     several apparent sizes, which is the core difficulty in VisDrone.
+        # Ultralytics' defaults (fliplr=0.5, scale=0.5, mosaic=1.0,
+        # close_mosaic=10) are already sensible for this dataset and are left
+        # alone -- checked against cfg/default.yaml rather than assumed. The
+        # one real change: flipud defaults to 0.0 (label-ruining for a normal,
+        # ground-level photo) but VisDrone is shot nadir, straight down, so
+        # there is no canonical "up" and a vertical flip is label-preserving
+        # here.
         flipud=0.5,
-        fliplr=0.5,
-        scale=0.5,
-        # mosaic is left at its default (1.0) but disabled for the final
-        # epochs, which is standard practice -- mosaic distorts object scale
-        # statistics and hurts if it runs all the way to convergence.
-        close_mosaic=10,
         plots=True,
         val=True,
     )
