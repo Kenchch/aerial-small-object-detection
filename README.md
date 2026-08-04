@@ -97,15 +97,15 @@ raw PyTorch model across backends.
 
 | backend | median latency | FPS |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.49 ms | 80.1 |
-| ONNX Runtime (CUDA) | **11.39 ms** | 87.8 |
-| ONNX Runtime (CPU) | 101.13 ms | 9.9 |
+| PyTorch (CUDA, eager) | 12.15 ms | 82.3 |
+| ONNX Runtime (CUDA) | **11.43 ms** | 87.5 |
+| ONNX Runtime (CPU) | 122.51 ms | 8.2 |
 
 Median of 100 timed iterations after 20 warmup iterations, with
 `torch.cuda.synchronize()` before each stop — GPU work is asynchronous, so
 timing without it measures kernel *launch*, not the kernel. ONNX export gives
-a modest ~10 % speedup over eager PyTorch on GPU here; the more decisive
-number is CPU, roughly **9× slower** than either GPU path — the case for
+a modest ~6 % speedup over eager PyTorch on GPU here; the more decisive
+number is CPU, roughly **10–11× slower** than either GPU path — the case for
 keeping inference on a GPU-equipped edge device rather than falling back to
 CPU.
 
