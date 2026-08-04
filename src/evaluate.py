@@ -32,9 +32,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
-def per_class_table(weights: Path, data: str, imgsz: int) -> None:
+def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> None:
     model = YOLO(str(weights))
-    m = model.val(data=data, imgsz=imgsz, device=0, verbose=False)
+    m = model.val(data=data, imgsz=imgsz, device=device, verbose=False)
     names = m.names
 
     print(f"\n{'=' * 66}")
@@ -129,6 +129,16 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
                 px_area_640.append((w_n * W * s640) * (h_n * H * s640))
                 px_area_imgsz.append((w_n * W * s_imgsz) * (h_n * H * s_imgsz))
 
+    if not areas:
+        # np.mean/np.median on an empty array return nan without raising, so
+        # without this guard every stat below would silently print "nan %"
+        # instead of saying plainly that no boxes were found -- label files
+        # existed (the earlier guard passed) but every one was empty (e.g.
+        # an all-background split, or all lines shorter than 5 fields).
+        print(f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
+              f"but none contained a valid box -- nothing to summarise.")
+        return
+
     areas = np.asarray(areas)
     # COCO's convention: "small" is <32x32 px. On a 640px frame that is
     # 1024/409600 = 0.25% of the image area.
@@ -169,12 +179,17 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--weights", required=True, type=Path)
     p.add_argument("--data", default="VisDrone.yaml")
-    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--imgsz", type=int, default=1024,
+                   help="Should match the resolution the weights were "
+                        "trained at (this project's default); evaluating a "
+                        "1024px-trained model at a different size is valid "
+                        "but not what the committed numbers reflect.")
     p.add_argument("--split", default="val")
+    p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
     args = p.parse_args()
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    per_class_table(args.weights, args.data, args.imgsz)
+    per_class_table(args.weights, args.data, args.imgsz, args.device)
     label_size_distribution(args.data, args.split, args.imgsz)
 
 

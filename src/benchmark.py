@@ -109,10 +109,10 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     return _summarise(times)
 
 
-def run_one(weights: Path, imgsz: int, data: str) -> dict:
+def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
     """Accuracy + latency across every available backend."""
     # --- accuracy -------------------------------------------------------
-    metrics = YOLO(str(weights)).val(data=data, imgsz=imgsz, device=0, verbose=False)
+    metrics = YOLO(str(weights)).val(data=data, imgsz=imgsz, device=device, verbose=False)
     row = {
         "imgsz": imgsz,
         "mAP50": round(metrics.box.map50, 4),
@@ -121,8 +121,15 @@ def run_one(weights: Path, imgsz: int, data: str) -> dict:
     print(f"  mAP50={row['mAP50']}  mAP50-95={row['mAP50_95']}")
 
     # --- latency --------------------------------------------------------
-    row["pytorch_cuda"] = bench_pytorch(weights, imgsz, "cuda")
-    print(f"  PyTorch  CUDA : {row['pytorch_cuda']}")
+    # This specific comparison is CUDA-vs-CUDA-vs-CPU by design (that is the
+    # whole point of the table), so it does not follow --device -- but it
+    # must not crash a CPU-only machine outright, since the ONNX-CPU row
+    # below is still meaningful there.
+    if torch.cuda.is_available():
+        row["pytorch_cuda"] = bench_pytorch(weights, imgsz, "cuda")
+        print(f"  PyTorch  CUDA : {row['pytorch_cuda']}")
+    else:
+        print("  PyTorch  CUDA : skipped (no CUDA device on this machine)")
 
     # weights.stem, not a hardcoded "best": otherwise running against last.pt
     # after best.pt at the same imgsz finds best_<imgsz>.onnx already on disk,
@@ -154,19 +161,27 @@ def main() -> None:
     p.add_argument("--weights", required=True, type=Path)
     p.add_argument("--data", default="VisDrone.yaml")
     p.add_argument("--imgsz", type=int, default=1024)
+    p.add_argument("--device", default="0",
+                   help="Device for the accuracy .val() pass, e.g. '0' or "
+                        "'cpu'. The PyTorch-CUDA and ONNX-CUDA latency rows "
+                        "always need an actual CUDA device regardless of "
+                        "this setting -- that comparison is CUDA vs CPU by "
+                        "definition -- and are skipped, not forced, when "
+                        "one isn't available.")
     p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
     args = p.parse_args()
 
-    row = run_one(args.weights, args.imgsz, args.data)
+    row = run_one(args.weights, args.imgsz, args.data, args.device)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(row, indent=2))
 
-    gpu = row.get("onnx_cuda", {}).get("median_ms", float("nan"))
+    torch_cuda = row.get("pytorch_cuda", {}).get("median_ms")
+    onnx_cuda = row.get("onnx_cuda", {}).get("median_ms")
     print(f"\n{'=' * 60}")
     print(f"imgsz {row['imgsz']}   mAP50 {row['mAP50']}   mAP50-95 {row['mAP50_95']}")
-    print(f"PyTorch CUDA : {row['pytorch_cuda']['median_ms']:.2f} ms")
-    print(f"ONNX  CUDA   : {gpu:.2f} ms")
+    print(f"PyTorch CUDA : {'n/a' if torch_cuda is None else f'{torch_cuda:.2f} ms'}")
+    print(f"ONNX  CUDA   : {'n/a' if onnx_cuda is None else f'{onnx_cuda:.2f} ms'}")
     print(f"ONNX  CPU    : {row['onnx_cpu']['median_ms']:.2f} ms")
     print(f"\nsaved -> {args.out}")
 
