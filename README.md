@@ -24,6 +24,13 @@ imagery across 10 classes (pedestrian, car, van, truck, bus, motor, …).
 That object density is not incidental — it drives most of the engineering
 decisions below.
 
+![Training-split label distribution: class counts, spatial density and box width/height](runs/n_1024/labels.jpg)
+
+Training split (6,471 frames), not val. The width/height scatter bottom-right
+is the same "boxes are tiny" fact as the analysis below, from a different
+angle: normalised box width and height both cluster near 0, with essentially
+nothing past ~0.1 on either axis.
+
 ---
 
 ## The problem, quantified
@@ -86,6 +93,15 @@ outperforms `pedestrian`, which has 38× more training signal (22.8 %). What
 separates them is apparent size: a bus occupies tens of pixels from altitude,
 a pedestrian occupies a handful, and the label-scale table above is exactly
 where that prediction came from.
+
+![Normalised confusion matrix on the val split](runs/n_1024/confusion_matrix_normalized.png)
+
+The `background` row is the recall story in one place: of true `pedestrian`
+instances, 0.29 are predicted as background; `motor` 0.19; `bicycle` 0.41 —
+missed outright, not misclassified as another object. That is consistent with
+the per-class table above (small classes score low mostly on recall, not
+precision) and with a model whose limiting factor is how many pixels an
+object occupies, not how well it distinguishes similar categories.
 
 ---
 
