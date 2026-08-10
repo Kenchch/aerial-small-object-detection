@@ -154,22 +154,22 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.99 ms | 1.18 ms |
-| detect + track | 34.73 ms | **99.68 ms** |
-| annotate | 3.21 ms | 3.70 ms |
-| encode | 2.41 ms | 2.93 ms |
-| **accounted** | | **107.49 ms** |
-| **wall per frame** | | **107.56 ms** |
+| decode | 0.90 ms | 1.20 ms |
+| detect + track | 34.80 ms | **108.02 ms** |
+| annotate | 3.55 ms | 4.34 ms |
+| encode | 2.68 ms | 3.02 ms |
+| **accounted** | | **116.58 ms** |
+| **wall per frame** | | **116.66 ms** |
 
 Coverage 99.9 % — the profile accounts for nearly all of wall-clock time.
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,900 ms — 170× the steady-state 34.7 ms**, from CUDA context
+frame costs **6,569 ms — 189× the steady-state 34.8 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (99.68 ms) and the median (34.73 ms), which is why this
-clip's end-to-end throughput (**9.3 FPS**) is well below its steady-state rate.
+gap between the mean (108.02 ms) and the median (34.80 ms), which is why this
+clip's end-to-end throughput (**8.6 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **41.34 ms/frame → 24.2 FPS**, not the ~29 FPS a detect+track-only
+— which gives **41.93 ms/frame → 23.8 FPS**, not the ~29 FPS a detect+track-only
 figure would suggest. That distinction matters for short-clip batch processing
 versus a long-running stream.
 
@@ -285,10 +285,16 @@ reach, not a converged result.
 conda create -n yolo -c conda-forge --override-channels python=3.11 pip -y
 conda activate yolo
 
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-pip install ultralytics onnx onnxslim opencv-python
-pip install "onnxruntime-gpu==1.20.2"   # CUDA 12 line -- see engineering notes
+# torch first, from the cu124 index -- PyPI's default wheels are CPU-only.
+pip install torch==2.6.0 torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
 ```
+
+`requirements.txt` is the single source of truth for versions; the first
+command only exists because pip cannot express "this package from a different
+index" inside a requirements file. It installs the same two pins the file
+declares, so the second command finds them already satisfied and moves on.
 
 Both pins are load-bearing: `--index-url .../cu124` avoids the CPU-only wheels
 PyPI serves by default, and `onnxruntime-gpu==1.20.2` avoids a build that
@@ -330,6 +336,7 @@ docker run --gpus all -it -v ${PWD}/datasets:/workspace/datasets aerial-detectio
 python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --batch 6 --name n_1024
 
 # Per-class metrics + ground-truth object-size distribution
+# -> reports/evaluation.json
 python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 
 # ONNX export + latency across backends (run on an idle GPU)
@@ -349,5 +356,5 @@ src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 runs/                   training artefacts (weights gitignored)
-reports/                benchmark and tracking output
+reports/                evaluation, benchmark and tracking output (JSON)
 ```

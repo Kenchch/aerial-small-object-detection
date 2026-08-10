@@ -19,12 +19,13 @@ Usage
 """
 
 import argparse
+import json
 from collections import Counter
 from pathlib import Path
 
-import cv2
 import numpy as np
 import yaml
+from PIL import Image
 from ultralytics import YOLO
 from ultralytics.utils import SETTINGS
 
@@ -32,7 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
-def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> None:
+def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> dict:
     model = YOLO(str(weights))
     m = model.val(data=data, imgsz=imgsz, device=device, verbose=False)
     names = m.names
@@ -61,8 +62,29 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
     print(f"\nbest  class: {best[0]}  (mAP50-95 {best[4]:.3f})")
     print(f"worst class: {worst[0]}  (mAP50-95 {worst[4]:.3f})")
 
+    return {
+        "imgsz": imgsz,
+        "overall": {
+            "precision": round(float(m.box.mp), 4),
+            "recall": round(float(m.box.mr), 4),
+            "mAP50": round(float(m.box.map50), 4),
+            "mAP50_95": round(float(m.box.map), 4),
+        },
+        "per_class": {
+            name: {
+                "precision": round(float(p), 4),
+                "recall": round(float(r), 4),
+                "mAP50": round(float(ap50), 4),
+                "mAP50_95": round(float(ap), 4),
+            }
+            for name, p, r, ap50, ap in rows
+        },
+        "best_class": best[0],
+        "worst_class": worst[0],
+    }
 
-def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> None:
+
+def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> dict:
     """Box-area distribution of the ground-truth labels, as % of frame area,
     plus the true pixel size those boxes end up at once YOLO resizes the image.
 
@@ -96,7 +118,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     files = list(label_dir.glob("*.txt"))
     if not files:
         print(f"\n[warn] no label files under {label_dir}")
-        return
+        return {}
 
     areas, cls_counter = [], Counter()
     px_area_640, px_area_imgsz = [], []
@@ -109,10 +131,16 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         )
         W = H = None
         if img_path is not None:
-            img = cv2.imread(str(img_path))
-            if img is not None:
-                H, W = img.shape[:2]
+            # PIL.Image.open is lazy: .size comes from the header, so this
+            # reads a few hundred bytes per file instead of decoding whole
+            # frames. Only the dimensions are needed here, and at 6,471
+            # train-split images the difference is minutes.
+            try:
+                with Image.open(img_path) as im:
+                    W, H = im.size
                 dims_seen[(W, H)] += 1
+            except OSError:
+                W = H = None
 
         for line in f.read_text().splitlines():
             parts = line.split()
@@ -137,7 +165,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         # an all-background split, or all lines shorter than 5 fields).
         print(f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
               f"but none contained a valid box -- nothing to summarise.")
-        return
+        return {}
 
     areas = np.asarray(areas)
     # COCO's convention: "small" is <32x32 px. On a 640px frame that is
@@ -174,6 +202,24 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     for c, n in cls_counter.most_common():
         print(f"    {names.get(c, c):<20} {n:>8,}  ({n / len(areas) * 100:5.1f} %)")
 
+    return {
+        "split": split,
+        "boxes": len(areas),
+        "images": len(files),
+        "share_pct": {
+            "small_lt_0.25pct": round(float(small), 1),
+            "medium_0.25_to_1pct": round(float(medium), 1),
+            "large_gt_1pct": round(float(large), 1),
+        },
+        "median_box_area_pct_of_frame": round(float(np.median(areas)) * 100, 4),
+        "median_box_side_px": {
+            "at_640": round(float(np.sqrt(np.median(px_area_640))), 1) if px_area_640 else None,
+            f"at_{imgsz}": round(float(np.sqrt(np.median(px_area_imgsz))), 1) if px_area_imgsz else None,
+        },
+        "source_dims_seen": {f"{w}x{h}": n for (w, h), n in dims_seen.most_common()},
+        "class_balance": {str(names.get(c, c)): n for c, n in cls_counter.most_common()},
+    }
+
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -186,11 +232,25 @@ def main() -> None:
                         "but not what the committed numbers reflect.")
     p.add_argument("--split", default="val")
     p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
+    p.add_argument("--out", type=Path, default=REPORTS_DIR / "evaluation.json")
     args = p.parse_args()
 
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    per_class_table(args.weights, args.data, args.imgsz, args.device)
-    label_size_distribution(args.data, args.split, args.imgsz)
+    report = {
+        "accuracy": per_class_table(args.weights, args.data, args.imgsz, args.device),
+        "label_scale": label_size_distribution(args.data, args.split, args.imgsz),
+        "config": {
+            "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
+                       if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
+                       else str(args.weights),
+            "data": args.data,
+            "imgsz": args.imgsz,
+            "split": args.split,
+        },
+    }
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(report, indent=2))
+    print(f"\n  metrics -> {args.out}")
 
 
 if __name__ == "__main__":

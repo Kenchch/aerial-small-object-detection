@@ -1,5 +1,16 @@
-"""Requires the project env (opencv, numpy) -- see requirements.txt."""
-from track import track_colour
+"""Unit tests for track.py's pure helpers.
+
+track_colour needs only numpy, but track.py imports cv2 and ultralytics at
+module scope -- see test_benchmark.py for why those imports are guarded
+rather than left to fail at collection time.
+"""
+import pytest
+
+pytest.importorskip("cv2", reason="project env not installed (see requirements.txt)")
+pytest.importorskip("numpy", reason="project env not installed (see requirements.txt)")
+pytest.importorskip("ultralytics", reason="project env not installed (see requirements.txt)")
+
+from track import track_colour  # noqa: E402  (must follow the skip guards)
 
 
 def test_colour_is_deterministic_per_track_id():

@@ -1,0 +1,113 @@
+{
+  "accuracy": {
+    "imgsz": 1024,
+    "overall": {
+      "precision": 0.4953,
+      "recall": 0.3867,
+      "mAP50": 0.3748,
+      "mAP50_95": 0.2216
+    },
+    "per_class": {
+      "pedestrian": {
+        "precision": 0.5321,
+        "recall": 0.4454,
+        "mAP50": 0.4399,
+        "mAP50_95": 0.1978
+      },
+      "people": {
+        "precision": 0.5243,
+        "recall": 0.3001,
+        "mAP50": 0.3043,
+        "mAP50_95": 0.1132
+      },
+      "bicycle": {
+        "precision": 0.298,
+        "recall": 0.1515,
+        "mAP50": 0.1111,
+        "mAP50_95": 0.0491
+      },
+      "car": {
+        "precision": 0.6971,
+        "recall": 0.7967,
+        "mAP50": 0.7961,
+        "mAP50_95": 0.5481
+      },
+      "van": {
+        "precision": 0.5165,
+        "recall": 0.4278,
+        "mAP50": 0.4228,
+        "mAP50_95": 0.2899
+      },
+      "truck": {
+        "precision": 0.4795,
+        "recall": 0.3733,
+        "mAP50": 0.3566,
+        "mAP50_95": 0.239
+      },
+      "tricycle": {
+        "precision": 0.4072,
+        "recall": 0.2957,
+        "mAP50": 0.2542,
+        "mAP50_95": 0.1421
+      },
+      "awning-tricycle": {
+        "precision": 0.2668,
+        "recall": 0.1767,
+        "mAP50": 0.1254,
+        "mAP50_95": 0.0812
+      },
+      "bus": {
+        "precision": 0.7246,
+        "recall": 0.4661,
+        "mAP50": 0.5146,
+        "mAP50_95": 0.3736
+      },
+      "motor": {
+        "precision": 0.5067,
+        "recall": 0.4341,
+        "mAP50": 0.4234,
+        "mAP50_95": 0.1821
+      }
+    },
+    "best_class": "car",
+    "worst_class": "bicycle"
+  },
+  "label_scale": {
+    "split": "val",
+    "boxes": 38759,
+    "images": 548,
+    "share_pct": {
+      "small_lt_0.25pct": 85.9,
+      "medium_0.25_to_1pct": 11.8,
+      "large_gt_1pct": 2.3
+    },
+    "median_box_area_pct_of_frame": 0.0552,
+    "median_box_side_px": {
+      "at_640": 11.3,
+      "at_1024": 18.0
+    },
+    "source_dims_seen": {
+      "1360x765": 408,
+      "960x540": 121,
+      "1920x1080": 19
+    },
+    "class_balance": {
+      "car": 14064,
+      "pedestrian": 8844,
+      "people": 5125,
+      "motor": 4886,
+      "van": 1975,
+      "bicycle": 1287,
+      "tricycle": 1045,
+      "truck": 750,
+      "awning-tricycle": 532,
+      "bus": 251
+    }
+  },
+  "config": {
+    "weights": "runs/n_1024/weights/best.pt",
+    "data": "VisDrone.yaml",
+    "imgsz": 1024,
+    "split": "val"
+  }
+}
