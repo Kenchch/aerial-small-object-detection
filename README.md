@@ -71,8 +71,17 @@ runs under AMP (`amp: true` in `runs/n_1024/args.yaml`, so fp16) and the
 standalone one in fp32, so the two are not numerically identical. Same
 weights, same split.
 
+![Training curves: box/cls/dfl losses and val metrics over 50 epochs](runs/n_1024/results.png)
+
+Both mAP curves are still rising at epoch 50 — see "What this does not
+establish" below.
+
 Per-class breakdown, sorted by difficulty, shows why the aggregate number is
-not the interesting one:
+not the interesting one. These rows come from `src/evaluate.py`'s standalone
+fp32 pass (`reports/evaluation.json`), so their arithmetic mean is exactly the
+0.3748 / 0.2216 above and *not* results.csv's 0.3733 / 0.2209 — worth checking
+against the table yourself. `share of labels` is the val split, matching the
+metrics beside it.
 
 | class | P | R | mAP50 | mAP50-95 | share of labels |
 | --- | --- | --- | --- | --- | --- |
@@ -88,20 +97,36 @@ not the interesting one:
 | car | 0.697 | 0.797 | 0.796 | **0.548** | 36.3 % |
 
 **The spread between best and worst class (11×) is not explained by label
-frequency.** `bus` is the rarest label in the set — 0.6 % of boxes — yet
-outperforms `pedestrian`, which has 38× more training signal (22.8 %). What
-separates them is apparent size: a bus occupies tens of pixels from altitude,
-a pedestrian occupies a handful, and the label-scale table above is exactly
-where that prediction came from.
+frequency.** Training signal has to be counted on the train split, not the val
+shares above: there `pedestrian` has 79,337 boxes to `bus`'s 5,926, so 13×
+more — and `bus` is not even the rarest training class, `awning-tricycle`
+(3,246) is. `bus` still scores nearly double `pedestrian` on mAP50-95 (0.374
+vs 0.198). What separates them is apparent size: a bus occupies tens of pixels
+from altitude, a pedestrian occupies a handful, and the label-scale table
+above is exactly where that prediction came from.
 
 ![Normalised confusion matrix on the val split](runs/n_1024/confusion_matrix_normalized.png)
 
-The `background` row is the recall story in one place: of true `pedestrian`
-instances, 0.29 are predicted as background; `motor` 0.19; `bicycle` 0.41 —
-missed outright, not misclassified as another object. That is consistent with
-the per-class table above (small classes score low mostly on recall, not
-precision) and with a model whose limiting factor is how many pixels an
-object occupies, not how well it distinguishes similar categories.
+Columns are the true class and sum to 1, so each column splits three ways:
+correct, missed (the `background` row), and misclassified (everything else).
+Splitting them apart is the part the aggregate mAP hides, and the two failure
+modes are not distributed evenly.
+
+Missing dominates for `bicycle` (0.41 to background) and `pedestrian` (0.29).
+Confusion dominates for `motor`: only 0.19 is missed, while 0.38 is spread
+across `bicycle`, `people`, `pedestrian` and `tricycle` — twice as much error
+from picking the wrong label as from not detecting the object at all. `people`
+is an even split (0.36 missed, 0.35 misclassified, most of it into
+`pedestrian`).
+
+So object scale explains one failure mode, not both. The vehicle classes are
+larger and do keep most of their error on the `background` row, which is the
+resolution argument working as predicted. But the
+`pedestrian`/`people`/`bicycle`/`motor` block is a different problem: there
+the model finds the object and picks the wrong label among four visually
+similar small categories. More input pixels address the first; the second is
+as much a class-definition problem as a resolution one, and this project does
+not show that training higher would fix it.
 
 ---
 
@@ -161,7 +186,8 @@ moving objects or occlusion, so track-continuity numbers below describe the
 | **accounted** | | **116.58 ms** |
 | **wall per frame** | | **116.66 ms** |
 
-Coverage 99.9 % — the profile accounts for nearly all of wall-clock time.
+Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
+for nearly all of wall-clock time.
 Median and mean disagree sharply on one stage because of one frame: the first
 frame costs **6,569 ms — 189× the steady-state 34.8 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the

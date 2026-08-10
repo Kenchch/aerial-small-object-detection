@@ -36,16 +36,18 @@ Usage
 import argparse
 from pathlib import Path
 
-import cv2
-import numpy as np
-from ultralytics.utils import SETTINGS
-
+# cv2/numpy/ultralytics are imported inside the functions that use them, after
+# parse_args(). At module scope they pin `--help` to a fully provisioned
+# environment, which makes the CLI undiscoverable exactly when someone is
+# trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def densest_val_image() -> tuple[Path, int]:
     """Pick the val frame with the most labelled objects — the hardest case
     for association, and the most legible demo."""
+    from ultralytics.utils import SETTINGS
+
     root = Path(SETTINGS["datasets_dir"]) / "VisDrone"
     labels = root / "labels" / "val"
     images = root / "images" / "val"
@@ -71,6 +73,9 @@ def main() -> None:
                         "means more apparent motion and more objects entering "
                         "and leaving — a harder association test.")
     args = p.parse_args()
+
+    import cv2
+    import numpy as np
 
     src_path, n_obj = densest_val_image()
     img = cv2.imread(str(src_path))

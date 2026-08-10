@@ -29,10 +29,11 @@ import statistics
 import time
 from pathlib import Path
 
-import numpy as np
-import torch
-from ultralytics import YOLO
-
+# numpy/torch/ultralytics are imported inside the functions that use them,
+# after parse_args(). At module scope they pin `--help` to a fully provisioned
+# environment, which makes the CLI undiscoverable exactly when someone is
+# trying to find out what it needs. Note bench_onnx needs numpy too -- it is
+# not only used by the torch paths.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
@@ -54,6 +55,9 @@ def _summarise(times_ms: list[float]) -> dict:
 
 def bench_pytorch(weights: Path, imgsz: int, device: str = "cuda") -> dict:
     """Latency of the raw PyTorch model -- the pre-optimisation reference."""
+    import torch
+    from ultralytics import YOLO
+
     model = YOLO(str(weights)).model.fuse().eval().to(device)
     dummy = torch.randn(1, 3, imgsz, imgsz, device=device)
 
@@ -84,6 +88,7 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     reports honest numbers under a dishonest label, which is worse than an
     outright error. So verify what actually got bound and record it.
     """
+    import numpy as np
     import onnxruntime as ort
 
     sess = ort.InferenceSession(str(onnx_path), providers=[provider])
@@ -111,6 +116,9 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
 
 def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
     """Accuracy + latency across every available backend."""
+    import torch
+    from ultralytics import YOLO
+
     # --- accuracy -------------------------------------------------------
     metrics = YOLO(str(weights)).val(data=data, imgsz=imgsz, device=device, verbose=False)
     row = {

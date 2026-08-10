@@ -25,20 +25,21 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-import cv2
-import numpy as np
-from ultralytics import YOLO
-
+# cv2/numpy/ultralytics are imported inside the functions that use them, after
+# parse_args(). At module scope they pin `--help` to a fully provisioned
+# environment, which makes the CLI undiscoverable exactly when someone is
+# trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
-# Ten VisDrone classes; colours are per-track, not per-class, because the thing
-# being communicated in a tracking overlay is identity persistence.
-FONT = cv2.FONT_HERSHEY_SIMPLEX
+# Colours are per-track, not per-class, because the thing being communicated in
+# a tracking overlay is identity persistence.
 
 
 def track_colour(track_id: int) -> tuple:
     """Stable pseudo-random BGR colour per track id."""
+    import numpy as np
+
     rng = np.random.default_rng(int(track_id) * 9973)
     c = rng.integers(70, 255, size=3)
     return int(c[0]), int(c[1]), int(c[2])
@@ -46,6 +47,8 @@ def track_colour(track_id: int) -> tuple:
 
 def frame_source(source: Path):
     """Yield (frame, fps, size) from a video file or a directory of images."""
+    import cv2
+
     if source.is_dir():
         files = sorted(
             [p for p in source.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
@@ -97,6 +100,10 @@ def main() -> None:
                         "on, and the committed numbers are from a GPU run.")
     args = p.parse_args()
 
+    import cv2
+    from ultralytics import YOLO
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
     model = YOLO(str(args.weights))
 
     src = frame_source(args.source)
@@ -116,7 +123,6 @@ def main() -> None:
 
     t_infer, t_draw, t_write, t_decode = [], [], [], []
     track_frames = defaultdict(int)      # track id -> frames seen
-    track_class = {}
     n_frames = 0
     wall_start = time.perf_counter()
 
@@ -140,16 +146,18 @@ def main() -> None:
             xyxy = boxes.xyxy.cpu().numpy()
             ids = boxes.id.cpu().numpy().astype(int)
             clss = boxes.cls.cpu().numpy().astype(int)
-            for (x1, y1, x2, y2), tid, cid in zip(xyxy, ids, clss):
+            # strict=True: these three come off the same Boxes object and must
+            # be the same length. Silently truncating to the shortest would
+            # drop detections from the profile rather than report the problem.
+            for (x1, y1, x2, y2), tid, cid in zip(xyxy, ids, clss, strict=True):
                 track_frames[tid] += 1
-                track_class[tid] = model.names[cid]
                 colour = track_colour(tid)
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
                 label = f"{model.names[cid]} {tid}"
-                (tw, th), _ = cv2.getTextSize(label, FONT, 0.4, 1)
+                (tw, th), _ = cv2.getTextSize(label, font, 0.4, 1)
                 cv2.rectangle(frame, (int(x1), int(y1) - th - 4),
                               (int(x1) + tw + 4, int(y1)), colour, -1)
-                cv2.putText(frame, label, (int(x1) + 2, int(y1) - 3), FONT, 0.4,
+                cv2.putText(frame, label, (int(x1) + 2, int(y1) - 3), font, 0.4,
                             (0, 0, 0), 1, cv2.LINE_AA)
         t_draw.append((time.perf_counter() - t0) * 1000)
 
