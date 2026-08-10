@@ -14,8 +14,10 @@ Usage
 import argparse
 from pathlib import Path
 
-from ultralytics import YOLO
-
+# ultralytics is imported inside main(), after parse_args(). Importing it at
+# module scope pulls in torch and pins `--help` to a fully provisioned
+# environment, which makes the CLI undiscoverable exactly when someone is
+# trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = PROJECT_ROOT / "runs"
 
@@ -72,6 +74,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    from ultralytics import YOLO
 
     if args.resume:
         last = RUNS_DIR / args.name / "weights" / "last.pt"

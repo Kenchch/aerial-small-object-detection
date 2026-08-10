@@ -23,17 +23,17 @@ import json
 from collections import Counter
 from pathlib import Path
 
-import numpy as np
-import yaml
-from PIL import Image
-from ultralytics import YOLO
-from ultralytics.utils import SETTINGS
-
+# numpy/PIL/yaml/ultralytics are imported inside the functions that use them,
+# after parse_args(). At module scope they pull in torch and pin `--help` to a
+# fully provisioned environment, which makes the CLI undiscoverable exactly
+# when someone is trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
 def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> dict:
+    from ultralytics import YOLO
+
     model = YOLO(str(weights))
     m = model.val(data=data, imgsz=imgsz, device=device, verbose=False)
     names = m.names
@@ -103,6 +103,11 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     applies the correct per-image letterbox scale, rather than assuming one
     aspect ratio for the whole split.
     """
+    import numpy as np
+    import yaml
+    from PIL import Image
+    from ultralytics.utils import SETTINGS
+
     data_yaml = Path(SETTINGS["datasets_dir"]) / data if not Path(data).exists() else Path(data)
     # Ultralytics resolves the yaml itself; locate it via its own config dir.
     if not data_yaml.exists():
@@ -185,7 +190,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     if px_area_640 and px_area_imgsz:
         side640 = np.sqrt(np.median(px_area_640))
         side_imgsz = np.sqrt(np.median(px_area_imgsz))
-        print(f"\n  source image dimensions seen (w x h : count):")
+        print("\n  source image dimensions seen (w x h : count):")
         for (w, h), n in dims_seen.most_common():
             print(f"    {w}x{h}  ({n})")
         print(f"\n  -> under YOLO's letterbox resize (aspect ratio preserved, "
@@ -198,7 +203,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     print("     This is the argument for training at higher resolution.")
 
     names = cfg.get("names", {})
-    print(f"\n  class balance:")
+    print("\n  class balance:")
     for c, n in cls_counter.most_common():
         print(f"    {names.get(c, c):<20} {n:>8,}  ({n / len(areas) * 100:5.1f} %)")
 

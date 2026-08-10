@@ -1,16 +1,14 @@
 """Unit tests for track.py's pure helpers.
 
-track_colour needs only numpy, but track.py imports cv2 and ultralytics at
-module scope -- see test_benchmark.py for why those imports are guarded
-rather than left to fail at collection time.
+track.py defers its cv2/ultralytics imports into the functions that use them,
+so importing this module needs neither. track_colour does still call into
+numpy, which is the one dependency guarded below.
 """
 import pytest
 
-pytest.importorskip("cv2", reason="project env not installed (see requirements.txt)")
-pytest.importorskip("numpy", reason="project env not installed (see requirements.txt)")
-pytest.importorskip("ultralytics", reason="project env not installed (see requirements.txt)")
+pytest.importorskip("numpy", reason="track_colour draws from numpy's RNG")
 
-from track import track_colour  # noqa: E402  (must follow the skip guards)
+from track import track_colour  # noqa: E402  (must follow the skip guard)
 
 
 def test_colour_is_deterministic_per_track_id():

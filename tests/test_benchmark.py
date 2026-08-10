@@ -1,16 +1,10 @@
 """Unit tests for benchmark.py's pure helpers.
 
-_summarise needs only the standard library, but benchmark.py imports torch at
-module scope. A plain import here would fail at *collection* time without the
-project env installed, which aborts the entire run -- including the
-dependency-free tests in test_syntax.py. importorskip keeps that to a skip.
+benchmark.py defers its torch/ultralytics imports into the functions that use
+them, so this module imports cleanly with nothing but the standard library --
+no skip guard needed, and these run on a bare clone.
 """
-import pytest
-
-pytest.importorskip("torch", reason="project env not installed (see requirements.txt)")
-pytest.importorskip("ultralytics", reason="project env not installed (see requirements.txt)")
-
-from benchmark import _summarise  # noqa: E402  (must follow the skip guards)
+from benchmark import _summarise
 
 
 def test_summarise_basic_stats():
