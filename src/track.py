@@ -89,7 +89,12 @@ def main() -> None:
                         "confidence floor for most of their track.")
     p.add_argument("--out", type=Path, default=PROJECT_ROOT / "reports" / "track_out.mp4")
     p.add_argument("--no-write", action="store_true", help="Profile only; write no video.")
-    p.add_argument("--device", default="0")
+    p.add_argument("--device", default="0",
+                   help="'0' for GPU, or 'cpu'. Matches evaluate.py and "
+                        "benchmark.py. CPU works but is not the intended "
+                        "path here: the staged profile below is only "
+                        "meaningful against the hardware you plan to deploy "
+                        "on, and the committed numbers are from a GPU run.")
     args = p.parse_args()
 
     model = YOLO(str(args.weights))
@@ -171,10 +176,15 @@ def main() -> None:
 
     # ByteTrack's id counter is global and monotonic: it increments for every
     # tentative track, including the ones spawned from low-confidence
-    # detections that never get confirmed. The ratio of the highest id issued
-    # to the number of ids actually emitted is therefore a churn measure, and
-    # it matters downstream — anything keying on track id (a counter, a
-    # database, a re-id store) inherits that growth rate.
+    # detections that never get confirmed. The ratio of the highest id to the
+    # number of ids actually emitted is therefore a churn measure, and it
+    # matters downstream — anything keying on track id (a counter, a database,
+    # a re-id store) inherits that growth rate.
+    #
+    # track_frames is only written when a box is drawn, so this is the largest
+    # id that reached the output, not ByteTrack's internal counter (not exposed
+    # here, and possibly higher — a tentative track created after the last
+    # drawn box never appears). This and the churn ratio below are lower bounds.
     # int() because the ids come out of a numpy array and np.int64 is not
     # JSON-serialisable.
     max_id = int(max(track_frames)) if track_frames else 0
@@ -219,12 +229,12 @@ def main() -> None:
         },
         "tracks": {
             "unique_ids": len(track_frames),
-            "highest_id_issued": max_id,
+            "highest_id_seen": max_id,
             # Tentative (never-confirmed) ids per confirmed one -- NOT
             # max_id / confirmed, which counts the confirmed ids themselves
             # in the numerator too and would overstate this by exactly 1x.
-            "id_churn_ratio": round((max_id - len(track_frames)) / len(track_frames), 1)
-                              if track_frames else 0,
+            "id_churn_ratio_min": round((max_id - len(track_frames)) / len(track_frames), 1)
+                                  if track_frames else 0,  # lower bound, see above
             "mean_track_len_frames": round(sum(lengths) / len(lengths), 1) if lengths else 0,
             "max_track_len_frames": max(lengths) if lengths else 0,
             "single_frame_tracks": fragments,
@@ -232,10 +242,11 @@ def main() -> None:
             "mean_boxes_per_frame": round(sum(lengths) / n_frames, 1),
         },
         "config": {
-            # Relative to the project root, not str(args.weights) directly --
-            # an absolute path bakes in whoever's machine generated this file,
-            # and this report is committed for readers to look at.
-            "weights": str(Path(args.weights).resolve().relative_to(PROJECT_ROOT))
+            # Relative to the project root, and as_posix rather than str():
+            # this report is committed for readers to look at, so neither the
+            # absolute path nor the path separator of whoever generated it
+            # should end up baked into the file.
+            "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
                        if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
                        else str(args.weights),
             "imgsz": args.imgsz, "conf": args.conf, "tracker": args.tracker,
@@ -265,8 +276,8 @@ def main() -> None:
 
     t = report["tracks"]
     print(f"\n  unique tracks      : {t['unique_ids']}")
-    print(f"  highest id issued  : {t['highest_id_issued']}  "
-          f"(churn {t['id_churn_ratio']}× — tentative tracks per confirmed one)")
+    print(f"  highest id seen    : {t['highest_id_seen']}  "
+          f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)")
     print(f"  boxes per frame    : {t['mean_boxes_per_frame']}")
     print(f"  mean track length  : {t['mean_track_len_frames']} frames")
     print(f"  longest track      : {t['max_track_len_frames']} frames")
