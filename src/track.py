@@ -122,6 +122,11 @@ def main() -> None:
                               f"(mp4v codec unavailable in this OpenCV build?)")
 
     t_infer, t_draw, t_write, t_decode = [], [], [], []
+    # Ultralytics fills Results.speed with its own internal split of the call.
+    # Without these, "detect + track" is a single number roughly 3x the raw
+    # forward pass that benchmark.py reports, with nothing in either report
+    # saying where the difference goes.
+    t_pre, t_fwd, t_post = [], [], []
     track_frames = defaultdict(int)      # track id -> frames seen
     n_frames = 0
     wall_start = time.perf_counter()
@@ -139,6 +144,15 @@ def main() -> None:
         res = model.track(frame, imgsz=args.imgsz, conf=args.conf, device=args.device,
                           tracker=args.tracker, persist=True, verbose=False)[0]
         t_infer.append((time.perf_counter() - t0) * 1000)
+
+        # preprocess = letterbox + BGR->RGB + /255 + HWC->CHW + host-to-device;
+        # postprocess = NMS and box rescaling. Association is deliberately not
+        # in here -- Ultralytics runs the tracker after postprocess, so it
+        # falls out below as the remainder against the wall-clock t_infer.
+        speed = res.speed
+        t_pre.append(speed["preprocess"])
+        t_fwd.append(speed["inference"])
+        t_post.append(speed["postprocess"])
 
         t0 = time.perf_counter()
         boxes = res.boxes
@@ -208,6 +222,13 @@ def main() -> None:
     accounted_mean = mean(t_decode) + mean(t_infer) + mean(t_draw) + mean(t_write)
     per_frame_wall = wall / n_frames * 1000
 
+    # Association is not timed directly -- Ultralytics runs the tracker inside
+    # the same call and does not report it -- so take it as the remainder of
+    # the measured call after its own three reported phases. On the medians
+    # that also absorbs Python-level call overhead, which is why it is named
+    # for both rather than presented as a clean ByteTrack number.
+    assoc_median = med(t_infer) - (med(t_pre) + med(t_fwd) + med(t_post))
+
     report = {
         "frames": n_frames,
         "wall_s": round(wall, 2),
@@ -224,6 +245,16 @@ def main() -> None:
             "detect_and_track": round(mean(t_infer), 2),
             "annotate": round(mean(t_draw), 2),
             "encode": round(mean(t_write), 2) if t_write else None,
+        },
+        # What "detect + track" above is actually made of. benchmark.py times
+        # only the forward pass on a tensor already resident in VRAM, so it
+        # corresponds to `forward` here -- the rest is the cost of feeding a
+        # real frame in and turning logits back into tracked boxes.
+        "detect_and_track_ms_median": {
+            "preprocess": round(med(t_pre), 2),
+            "forward": round(med(t_fwd), 2),
+            "postprocess_nms": round(med(t_post), 2),
+            "association_and_overhead": round(assoc_median, 2),
         },
         "warmup": {
             "first_frame_ms": round(t_infer[0], 1) if t_infer else None,
@@ -272,6 +303,9 @@ def main() -> None:
         if md[k] is None:
             continue
         print(f"  {k:<18}{md[k]:>9.2f} {mn[k]:>9.2f}")
+        if k == "detect_and_track":
+            for sub, v in report["detect_and_track_ms_median"].items():
+                print(f"    {sub:<16}{v:>9.2f}")
     r = report["reconciliation"]
     print(f"  {'-' * 38}")
     print(f"  {'accounted':<18}{'':>9} {r['accounted_mean_ms']:>9.2f}")

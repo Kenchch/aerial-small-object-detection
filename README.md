@@ -188,6 +188,23 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
+
+**`detect + track` (34.80 ms) is not comparable to the 12.15 ms PyTorch row in
+the backend table above, and the difference is the point.** That row times a
+`nn.Module` forward pass on a tensor already resident in VRAM. This row times
+`model.track(frame)` on a decoded BGR frame, which additionally does letterbox
+resize, BGR→RGB, `/255`, HWC→CHW, the host-to-device copy, NMS, and ByteTrack's
+association step. Roughly 22 ms per frame lives in that difference — more than
+the forward pass itself.
+
+`src/track.py` breaks this out from Ultralytics' `Results.speed`, reporting
+`preprocess` / `forward` / `postprocess_nms` / `association_and_overhead` under
+`detect_and_track_ms_median`. Across repeated runs the *shares* hold steady at
+roughly 14 % / 41 % / 5 % / 40 % even when the absolute numbers move by 2× with
+machine load, so the forward pass is about **40 % of this stage, not all of
+it**. That reframes what is worth optimising: the backend table's ONNX-vs-eager
+win is 0.72 ms, while preprocessing and association together are an order of
+magnitude larger and are not touched by the export format at all.
 Median and mean disagree sharply on one stage because of one frame: the first
 frame costs **6,569 ms — 189× the steady-state 34.8 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
@@ -354,6 +371,18 @@ docker run --gpus all -it -v ${PWD}/datasets:/workspace/datasets aerial-detectio
 ```
 
 ## Usage
+
+Every command below except training needs the trained checkpoint, which is too
+large for git. Fetch it from the release rather than retraining for 3.3 hours:
+
+```bash
+mkdir -p runs/n_1024/weights
+curl -L -o runs/n_1024/weights/best.pt \
+  https://github.com/Kenchch/aerial-small-object-detection/releases/download/v1.0/best.pt
+```
+
+5.2 MB, sha256 `8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e`.
+Every number in this README is reproducible from it.
 
 ```bash
 # Train (1024px, chosen from the label-size distribution above).
