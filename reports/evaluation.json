@@ -138,10 +138,10 @@
     "split": "val",
     "boxes": 38759,
     "images": 548,
-    "share_pct": {
-      "small_lt_0.25pct": 85.9,
-      "medium_0.25_to_1pct": 11.8,
-      "large_gt_1pct": 2.3
+    "share_pct_coco_at_640": {
+      "small_lt_32x32px": 92.4,
+      "medium_32_to_96px": 7.5,
+      "large_gt_96x96px": 0.1
     },
     "median_box_area_pct_of_frame": 0.0552,
     "median_box_side_px": {

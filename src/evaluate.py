@@ -196,18 +196,30 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         return {}
 
     areas = np.asarray(areas)
-    # COCO's convention: "small" is <32x32 px. On a 640px frame that is
-    # 1024/409600 = 0.25% of the image area.
-    small = (areas < 0.0025).mean() * 100
-    medium = ((areas >= 0.0025) & (areas < 0.01)).mean() * 100
-    large = (areas >= 0.01).mean() * 100
+    # COCO's convention: "small" is <32x32 px, "medium" <96x96. Apply it to the
+    # actual rendered pixel area, not to a share of the frame.
+    #
+    # The share-of-frame shortcut (area < 0.0025, justified as 1024/409600)
+    # silently assumes the image is squashed to 640x640. It is not -- letterbox
+    # preserves aspect ratio, so a 16:9 frame renders into 640x360 = 230,400 px
+    # and the same 32x32 box is 0.44% of it, not 0.25%. Using one fixed share
+    # for a split that mixes 4:3 and 16:9 would contradict the letterbox
+    # correction applied a few lines above, so the split is computed from
+    # px_area_640 directly and is simply unavailable without source dimensions.
+    if px_area_640:
+        px640 = np.asarray(px_area_640)
+        small = (px640 < 32 * 32).mean() * 100
+        medium = ((px640 >= 32 * 32) & (px640 < 96 * 96)).mean() * 100
+        large = (px640 >= 96 * 96).mean() * 100
+    else:
+        small = medium = large = float("nan")
 
     print(f"\n{'=' * 66}")
     print(f"  Ground-truth object scale  ({split} split, {len(areas):,} boxes)")
     print(f"{'=' * 66}")
-    print(f"  small  (<0.25% of frame) : {small:5.1f} %")
-    print(f"  medium (0.25-1%)         : {medium:5.1f} %")
-    print(f"  large  (>1%)             : {large:5.1f} %")
+    print(f"  small  (<32x32 px @640)  : {small:5.1f} %")
+    print(f"  medium (32-96 px @640)   : {medium:5.1f} %")
+    print(f"  large  (>96x96 px @640)  : {large:5.1f} %")
     print(f"  median box area          : {np.median(areas) * 100:.4f} % of frame")
 
     if px_area_640 and px_area_imgsz:
@@ -234,10 +246,10 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         "split": split,
         "boxes": len(areas),
         "images": len(files),
-        "share_pct": {
-            "small_lt_0.25pct": round(float(small), 1),
-            "medium_0.25_to_1pct": round(float(medium), 1),
-            "large_gt_1pct": round(float(large), 1),
+        "share_pct_coco_at_640": {
+            "small_lt_32x32px": round(float(small), 1),
+            "medium_32_to_96px": round(float(medium), 1),
+            "large_gt_96x96px": round(float(large), 1),
         },
         "median_box_area_pct_of_frame": round(float(np.median(areas)) * 100, 4),
         "median_box_side_px": {
