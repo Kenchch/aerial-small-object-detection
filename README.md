@@ -138,17 +138,20 @@ raw PyTorch model across backends.
 
 | backend | median latency | FPS |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.15 ms | 82.3 |
-| ONNX Runtime (CUDA) | **11.43 ms** | 87.5 |
-| ONNX Runtime (CPU) | 122.51 ms | 8.2 |
+| PyTorch (CUDA, eager) | 12.22 ms | 81.8 |
+| ONNX Runtime (CUDA) | **11.18 ms** | 89.4 |
+| ONNX Runtime (CPU) | 100.20 ms | 10.0 |
 
 Median of 100 timed iterations after 20 warmup iterations, with
 `torch.cuda.synchronize()` before each stop — GPU work is asynchronous, so
 timing without it measures kernel *launch*, not the kernel. ONNX export gives
-a modest ~6 % speedup over eager PyTorch on GPU here; the more decisive
-number is CPU, roughly **10–11× slower** than either GPU path — the case for
+a modest ~8 % speedup over eager PyTorch on GPU here — 1.04 ms, and see the
+tracking section below for why that is the smaller prize. The more decisive
+number is CPU, roughly **8–9× slower** than either GPU path — the case for
 keeping inference on a GPU-equipped edge device rather than falling back to
-CPU.
+CPU. Eager PyTorch and ONNX-CPU are both sensitive to host load; these were
+measured in the same session as the tracking profile below, so the two
+sections are directly comparable.
 
 The GPU path used above is a genuine CUDA execution — worth stating because
 ONNX Runtime can silently substitute CPU for a missing CUDA library and still
@@ -179,42 +182,53 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.90 ms | 1.20 ms |
-| detect + track | 34.80 ms | **108.02 ms** |
-| annotate | 3.55 ms | 4.34 ms |
-| encode | 2.68 ms | 3.02 ms |
-| **accounted** | | **116.58 ms** |
-| **wall per frame** | | **116.66 ms** |
+| decode | 0.84 ms | 1.18 ms |
+| detect + track | 35.31 ms | **105.62 ms** |
+| ├ preprocess | 5.12 ms | |
+| ├ forward | 14.92 ms | |
+| ├ postprocess (NMS) | 1.89 ms | |
+| └ association + overhead | 13.38 ms | |
+| annotate | 3.15 ms | 4.21 ms |
+| encode | 2.51 ms | 2.92 ms |
+| **accounted** | | **113.93 ms** |
+| **wall per frame** | | **114.01 ms** |
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (34.80 ms) is not comparable to the 12.15 ms PyTorch row in
-the backend table above, and the difference is the point.** That row times a
-`nn.Module` forward pass on a tensor already resident in VRAM. This row times
-`model.track(frame)` on a decoded BGR frame, which additionally does letterbox
-resize, BGR→RGB, `/255`, HWC→CHW, the host-to-device copy, NMS, and ByteTrack's
-association step. Roughly 22 ms per frame lives in that difference — more than
-the forward pass itself.
+**`detect + track` (35.31 ms) is not the same measurement as the 12.22 ms
+PyTorch row in the backend table above, and the 23.09 ms between them is the
+interesting part.** That row times an `nn.Module` forward pass on a tensor
+already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
+frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
+host-to-device copy, NMS, and ByteTrack's association — so the four sub-rows
+above, taken from Ultralytics' `Results.speed`, are where that time goes.
+(`association + overhead` is the remainder after the three phases Ultralytics
+reports; the tracker is not separately instrumented, so it carries the
+per-call Python overhead too.)
 
-`src/track.py` breaks this out from Ultralytics' `Results.speed`, reporting
-`preprocess` / `forward` / `postprocess_nms` / `association_and_overhead` under
-`detect_and_track_ms_median`. Across repeated runs the *shares* hold steady at
-roughly 14 % / 41 % / 5 % / 40 % even when the absolute numbers move by 2× with
-machine load, so the forward pass is about **40 % of this stage, not all of
-it**. That reframes what is worth optimising: the backend table's ONNX-vs-eager
-win is 0.72 ms, while preprocessing and association together are an order of
-magnitude larger and are not touched by the export format at all.
+**The forward pass is 42 % of this stage. Preprocessing and association are
+another 52 %,** and neither is affected by the export format. That is the
+argument against reading the backend table as an optimisation roadmap: ONNX
+buys 1.04 ms on the forward pass, while 20.39 ms per frame sits in the
+surrounding work — batching the host-to-device copy, or moving letterboxing
+onto the GPU, is worth more here than anything the export format can do.
+
+The remaining 12.22 → 14.92 ms difference on the forward pass itself is
+per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
+shapes, `model.track()` does not.
+
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **6,569 ms — 189× the steady-state 34.8 ms**, from CUDA context
+frame costs **6,335 ms — 179× the steady-state 35.3 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (108.02 ms) and the median (34.80 ms), which is why this
-clip's end-to-end throughput (**8.6 FPS**) is well below its steady-state rate.
+gap between the mean (105.62 ms) and the median (35.31 ms), which is why this
+clip's end-to-end throughput (**8.8 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **41.93 ms/frame → 23.8 FPS**, not the ~29 FPS a detect+track-only
-figure would suggest. That distinction matters for short-clip batch processing
-versus a long-running stream.
+— which gives **41.81 ms/frame → 23.9 FPS**, not the ~28 FPS a detect+track-only
+figure would suggest, and nothing like the 89 FPS the ONNX row implies. That
+distinction matters for short-clip batch processing versus a long-running
+stream.
 
 Association quality: 306 unique tracks, mean length 10.3 frames, 26.1 %
 single-frame ("fragmented") tracks. 306 distinct track ids appear in the
