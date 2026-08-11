@@ -57,6 +57,28 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
     print(f"{'ALL':<22}{m.box.mp:>9.3f}{m.box.mr:>9.3f}"
           f"{m.box.map50:>10.3f}{m.box.map:>12.3f}")
 
+    # Decompose each true class's error into missed vs misclassified. The
+    # plotted confusion matrix carries this, but reading it off the image is
+    # error-prone -- the axes are Predicted x True and the interesting cells
+    # are off-diagonal -- so emit it as numbers the README can cite directly.
+    cm = m.confusion_matrix.matrix          # rows=Predicted, cols=True
+    col = cm.sum(axis=0)
+    confusion = {}
+    for j, name in enumerate(names.values()):
+        if not col[j]:
+            continue
+        correct = cm[j, j] / col[j]
+        missed = cm[-1, j] / col[j]
+        confusion[name] = {
+            "correct": round(float(correct), 3),
+            "missed_as_background": round(float(missed), 3),
+            "misclassified": round(float(cm[:-1, j].sum() / col[j] - correct), 3),
+            "top_confusion": max(
+                ((n2, cm[i, j] / col[j]) for i, n2 in enumerate(names.values()) if i != j),
+                key=lambda kv: kv[1], default=(None, 0.0),
+            )[0],
+        }
+
     worst = min(rows, key=lambda x: x[4])
     best = max(rows, key=lambda x: x[4])
     print(f"\nbest  class: {best[0]}  (mAP50-95 {best[4]:.3f})")
@@ -81,6 +103,7 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
         },
         "best_class": best[0],
         "worst_class": worst[0],
+        "error_split": confusion,
     }
 
 

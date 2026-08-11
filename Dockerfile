@@ -4,6 +4,15 @@ FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
 
 WORKDIR /workspace
 
+# opencv-python links against libGL and libglib, which the PyTorch runtime
+# images do not ship. Without these, `import cv2` raises
+# "libGL.so.1: cannot open shared object file" -- and since ultralytics itself
+# depends on opencv-python (not the headless build), that takes every command
+# in this image down with it, not just the ones that draw.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # torch/torchvision come from the base image's cu124 build; drop them from
 # requirements.txt so pip doesn't install a PyPI wheel over the top of it and
 # break the CUDA 12.4 premise above. The version specifier is matched
