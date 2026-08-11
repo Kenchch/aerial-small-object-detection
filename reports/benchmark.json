@@ -3,22 +3,22 @@
   "mAP50": 0.3748,
   "mAP50_95": 0.2216,
   "pytorch_cuda": {
-    "median_ms": 12.15,
-    "p95_ms": 16.77,
-    "min_ms": 10.88,
-    "fps": 82.3
+    "median_ms": 12.22,
+    "p95_ms": 13.93,
+    "min_ms": 10.68,
+    "fps": 81.9
   },
   "onnx_size_mb": 10.37,
   "onnx_cuda": {
-    "median_ms": 11.43,
-    "p95_ms": 14.63,
-    "min_ms": 10.88,
-    "fps": 87.5
+    "median_ms": 11.18,
+    "p95_ms": 14.94,
+    "min_ms": 10.55,
+    "fps": 89.5
   },
   "onnx_cpu": {
-    "median_ms": 122.51,
-    "p95_ms": 155.35,
-    "min_ms": 108.72,
-    "fps": 8.2
+    "median_ms": 100.2,
+    "p95_ms": 127.98,
+    "min_ms": 81.36,
+    "fps": 10.0
   }
 }
