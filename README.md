@@ -31,6 +31,11 @@ is the same "boxes are tiny" fact as the analysis below, from a different
 angle: normalised box width and height both cluster near 0, with essentially
 nothing past ~0.1 on either axis.
 
+The bar labels are Ultralytics' own count and run 1–3 low per class against a
+direct read of the label files — 79,335 vs 79,337 for `pedestrian`, and
+343,202 vs 343,205 in total. Counts quoted elsewhere in this README are the
+direct ones, so adding up the bars will not quite reproduce them.
+
 ---
 
 ## The problem, quantified
@@ -41,9 +46,15 @@ fraction of frame covered — no need to open the images.
 
 | ground-truth box scale (val, 38,759 boxes) | share |
 | --- | --- |
-| small — <0.25 % of frame | **85.9 %** |
-| medium — 0.25–1 % | 11.8 % |
-| large — >1 % | 2.3 % |
+| small — under 32×32 px | **92.4 %** |
+| medium — 32×32 to 96×96 px | 7.5 % |
+| large — over 96×96 px | 0.1 % |
+
+COCO's small/medium/large thresholds, applied to the pixel area each box
+actually occupies at a 640 px input *after letterboxing*. Applying them as a
+fixed share of the frame instead (the usual `<0.25 %` shortcut) assumes the
+image is squashed to 640×640, which is the very thing the paragraph below
+says YOLO does not do.
 
 The median box covers 0.055 % of the frame. Converting that to a pixel size
 needs the source image's actual dimensions, not just the target resolution —
@@ -52,9 +63,9 @@ side) rather than stretching to a square, so a naive `sqrt(area) * imgsz`
 overstates the box's true rendered size whenever the source isn't already
 square. Computed per-image from the val split's real dimensions (100% 16:9
 here): the median box is a **11 px** object at the YOLO default of 640 px
-input, or **18 px** at 1024 px. Six out of seven objects in this dataset are
-in the regime where downscaling destroys them, which is why this trains at
-1024px rather than the default.
+input, or **18 px** at 1024 px. Better than nine in ten objects in this
+dataset are in the regime where downscaling destroys them, which is why this
+trains at 1024px rather than the default.
 
 ---
 
@@ -162,8 +173,8 @@ raw PyTorch model across backends.
 
 | backend | median latency | FPS |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.22 ms | 81.8 |
-| ONNX Runtime (CUDA) | **11.18 ms** | 89.4 |
+| PyTorch (CUDA, eager) | 12.22 ms | 81.9 |
+| ONNX Runtime (CUDA) | **11.18 ms** | 89.5 |
 | ONNX Runtime (CPU) | 100.20 ms | 10.0 |
 
 Median of 100 timed iterations after 20 warmup iterations, with
@@ -455,6 +466,36 @@ src/evaluate.py         per-class metrics; label-size distribution
 src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
+tests/                  15 tests; run with `pytest`
+resume_training.ps1     restart an interrupted run from last.pt (Windows)
 runs/                   training artefacts (weights gitignored)
 reports/                evaluation, benchmark and tracking output (JSON)
 ```
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+15 tests, and they run on a bare clone — no torch, ultralytics or CUDA
+required. Two things they are actually guarding:
+
+- **`--help` must work uninstalled.** `tests/test_cli.py` runs every script's
+  `--help` in a subprocess and asserts exit 0. That only holds while the heavy
+  imports stay inside the functions that use them; a module-scope `import
+  torch` anywhere in `src/` turns the Dockerfile's default command into a
+  traceback. A subprocess specifically so an already-imported torch cannot
+  mask the regression.
+- **Every file under `src/` must parse.** `tests/test_syntax.py` walks the
+  directory rather than naming files, so a new script is covered the moment it
+  is added.
+
+The remaining tests cover the pure helpers — `_summarise`'s p95 indexing and
+`track_colour`'s determinism — which is most of what can be tested without a
+GPU and a 35 GB dataset.
+
+`reports/tracking_demo.gif` was made by hand from `reports/track_out.mp4`
+(ffmpeg) and has no script in the repo; `src/track.py --source
+reports/demo_pan.mp4` regenerates the underlying video.
