@@ -70,7 +70,69 @@
       }
     },
     "best_class": "car",
-    "worst_class": "bicycle"
+    "worst_class": "bicycle",
+    "error_split": {
+      "pedestrian": {
+        "correct": 0.518,
+        "missed_as_background": 0.291,
+        "misclassified": 0.191,
+        "top_confusion": "people"
+      },
+      "people": {
+        "correct": 0.292,
+        "missed_as_background": 0.357,
+        "misclassified": 0.351,
+        "top_confusion": "pedestrian"
+      },
+      "bicycle": {
+        "correct": 0.229,
+        "missed_as_background": 0.414,
+        "misclassified": 0.357,
+        "top_confusion": "motor"
+      },
+      "car": {
+        "correct": 0.713,
+        "missed_as_background": 0.093,
+        "misclassified": 0.194,
+        "top_confusion": "van"
+      },
+      "van": {
+        "correct": 0.341,
+        "missed_as_background": 0.101,
+        "misclassified": 0.558,
+        "top_confusion": "car"
+      },
+      "truck": {
+        "correct": 0.347,
+        "missed_as_background": 0.171,
+        "misclassified": 0.483,
+        "top_confusion": "car"
+      },
+      "tricycle": {
+        "correct": 0.252,
+        "missed_as_background": 0.199,
+        "misclassified": 0.549,
+        "top_confusion": "motor"
+      },
+      "awning-tricycle": {
+        "correct": 0.135,
+        "missed_as_background": 0.25,
+        "misclassified": 0.615,
+        "top_confusion": "car"
+      },
+      "bus": {
+        "correct": 0.422,
+        "missed_as_background": 0.179,
+        "misclassified": 0.398,
+        "top_confusion": "truck"
+      },
+      "motor": {
+        "correct": 0.435,
+        "missed_as_background": 0.188,
+        "misclassified": 0.377,
+        "top_confusion": "bicycle"
+      }
+    }
   },
   "label_scale": {
     "split": "val",

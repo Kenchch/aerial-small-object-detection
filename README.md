@@ -105,6 +105,12 @@ vs 0.198). What separates them is apparent size: a bus occupies tens of pixels
 from altitude, a pedestrian occupies a handful, and the label-scale table
 above is exactly where that prediction came from.
 
+The confusion matrix below isolates this. `pedestrian` is *classified* better
+than `bus` (0.52 of true instances correct, against 0.42) and still scores
+half the mAP50-95. Since mAP50-95 averages IoU thresholds from 0.5 to 0.95, a
+two-pixel boundary error on an 11 px box costs what it would not cost on a bus.
+The gap is localisation precision under scale, not recognition.
+
 ![Normalised confusion matrix on the val split](runs/n_1024/confusion_matrix_normalized.png)
 
 Columns are the true class and sum to 1, so each column splits three ways:
@@ -112,21 +118,39 @@ correct, missed (the `background` row), and misclassified (everything else).
 Splitting them apart is the part the aggregate mAP hides, and the two failure
 modes are not distributed evenly.
 
-Missing dominates for `bicycle` (0.41 to background) and `pedestrian` (0.29).
-Confusion dominates for `motor`: only 0.19 is missed, while 0.38 is spread
-across `bicycle`, `people`, `pedestrian` and `tricycle` — twice as much error
-from picking the wrong label as from not detecting the object at all. `people`
-is an even split (0.36 missed, 0.35 misclassified, most of it into
-`pedestrian`).
+`src/evaluate.py` emits this split per class as `error_split` in
+`reports/evaluation.json`, so the numbers below are citable rather than read
+off the image:
 
-So object scale explains one failure mode, not both. The vehicle classes are
-larger and do keep most of their error on the `background` row, which is the
-resolution argument working as predicted. But the
-`pedestrian`/`people`/`bicycle`/`motor` block is a different problem: there
-the model finds the object and picks the wrong label among four visually
-similar small categories. More input pixels address the first; the second is
-as much a class-definition problem as a resolution one, and this project does
-not show that training higher would fix it.
+| true class | correct | missed | misclassified | mostly as |
+| --- | --- | --- | --- | --- |
+| awning-tricycle | 0.14 | 0.25 | **0.61** | car |
+| van | 0.34 | 0.10 | **0.56** | car |
+| tricycle | 0.25 | 0.20 | **0.55** | motor |
+| truck | 0.35 | 0.17 | **0.48** | car |
+| bus | 0.42 | 0.18 | **0.40** | truck |
+| motor | 0.43 | 0.19 | **0.38** | bicycle |
+| bicycle | 0.23 | **0.41** | 0.36 | motor |
+| people | 0.29 | **0.36** | 0.35 | pedestrian |
+| car | 0.71 | 0.09 | **0.19** | van |
+| pedestrian | 0.52 | **0.29** | 0.19 | people |
+
+**Misclassification outweighs missing for seven of the ten classes**, so the
+dominant failure mode is not the one the resolution argument predicts. Only
+`pedestrian` is clearly missing-limited; `bicycle` and `people` are near-even.
+Everything else is being found and then labelled wrong.
+
+The confusions are not random. They collapse along two axes into the locally
+dominant class: the four-wheeled classes fall into `car` (42 % of training
+boxes), and the two-wheeled and pedestrian classes fall into each other. This
+is a fine-grained-distinction and class-balance problem, not a detection one,
+and more input pixels do not obviously address it.
+
+That narrows what the label-scale analysis actually supports. High recall loss
+on the smallest classes is real and consistent with training at 1024px rather
+than 640. But it does not follow that scale is *the* limiting factor overall —
+on this evidence, the larger share of the error budget is a labelling problem
+that a higher resolution would not have fixed.
 
 ---
 
@@ -326,6 +350,13 @@ truth track ids exist to score association against.
 
 **Latency figures come from a power-limited laptop GPU** (RTX 2070 Max-Q).
 The relative ordering of backends transfers; the absolute milliseconds do not.
+
+**The dominant error mode is untouched by anything tried here.**
+Misclassification exceeds missed detections for seven of ten classes, mostly
+minority classes collapsing into `car`. Resolution, batch size and augmentation
+were the levers pulled in this project, and none of them target that. Class
+re-weighting, a merge of the near-duplicate categories, or a higher-capacity
+backbone would be the next experiments — none were run.
 
 **Training was epoch-budget-limited, not converged.** `best.pt` is epoch 50 —
 the last epoch — and mAP50-95 was still rising when the budget ran out
