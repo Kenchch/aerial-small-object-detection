@@ -31,10 +31,14 @@ is the same "boxes are tiny" fact as the analysis below, from a different
 angle: normalised box width and height both cluster near 0, with essentially
 nothing past ~0.1 on either axis.
 
-The bar labels are Ultralytics' own count and run 1–3 low per class against a
-direct read of the label files — 79,335 vs 79,337 for `pedestrian`, and
-343,202 vs 343,205 in total. Counts quoted elsewhere in this README are the
-direct ones, so adding up the bars will not quite reproduce them.
+The bar labels are Ultralytics' own count and differ slightly from a direct
+read of the label files: `car` 144,866 vs 144,867, `pedestrian` 79,335 vs
+79,337, `motor` 29,646 vs 29,647. The other seven classes match exactly, so
+the bars sum to 343,201 against a direct total of 343,205. The gap is four
+boxes confined to the three largest classes, not a per-class offset. Counts
+quoted elsewhere in this README are the direct ones (`class_balance` in
+`reports/evaluation_train.json`), so adding up the bars will not quite
+reproduce them.
 
 ---
 
