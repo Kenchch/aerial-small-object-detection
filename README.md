@@ -56,6 +56,11 @@ fixed share of the frame instead (the usual `<0.25 %` shortcut) assumes the
 image is squashed to 640×640, which is the very thing the paragraph below
 says YOLO does not do.
 
+From `reports/evaluation.json`. The train split is in
+`reports/evaluation_train.json` and is slightly less extreme — 90.5 % small
+across 343,205 boxes — because it mixes 4:3 frames with the val split's
+uniform 16:9.
+
 The median box covers 0.055 % of the frame. Converting that to a pixel size
 needs the source image's actual dimensions, not just the target resolution —
 YOLO letterboxes (scales both axes by the same factor, padding the short
@@ -111,10 +116,12 @@ metrics beside it.
 frequency.** Training signal has to be counted on the train split, not the val
 shares above: there `pedestrian` has 79,337 boxes to `bus`'s 5,926, so 13×
 more — and `bus` is not even the rarest training class, `awning-tricycle`
-(3,246) is. `bus` still scores nearly double `pedestrian` on mAP50-95 (0.374
-vs 0.198). What separates them is apparent size: a bus occupies tens of pixels
-from altitude, a pedestrian occupies a handful, and the label-scale table
-above is exactly where that prediction came from.
+(3,246) is. Those counts are in `reports/evaluation_train.json`
+(`python src/evaluate.py --split train`), so they can be checked without
+downloading the dataset. `bus` still scores nearly double `pedestrian` on
+mAP50-95 (0.374 vs 0.198). What separates them is apparent size: a bus occupies
+tens of pixels from altitude, a pedestrian occupies a handful, and the
+label-scale table above is exactly where that prediction came from.
 
 The confusion matrix below isolates this. `pedestrian` is *classified* better
 than `bus` (0.52 of true instances correct, against 0.42) and still scores
@@ -469,7 +476,7 @@ src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 tests/                  15 tests; run with `pytest`
 resume_training.ps1     restart an interrupted run from last.pt (Windows)
 runs/                   training artefacts (weights gitignored)
-reports/                evaluation, benchmark and tracking output (JSON)
+reports/                evaluation (val + train), benchmark, tracking output (JSON)
 ```
 
 ## Tests
