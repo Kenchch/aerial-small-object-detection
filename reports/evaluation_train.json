@@ -1,0 +1,49 @@
+{
+  "accuracy": null,
+  "label_scale": {
+    "split": "train",
+    "boxes": 343205,
+    "images": 6471,
+    "share_pct_coco_at_640": {
+      "small_lt_32x32px": 90.5,
+      "medium_32_to_96px": 9.2,
+      "large_gt_96x96px": 0.2
+    },
+    "median_box_area_pct_of_frame": 0.0462,
+    "median_box_side_px": {
+      "at_640": 11.1,
+      "at_1024": 17.8
+    },
+    "source_dims_seen": {
+      "1400x1050": 2498,
+      "1400x788": 1299,
+      "2000x1500": 772,
+      "1360x765": 743,
+      "1916x1078": 537,
+      "1920x1080": 339,
+      "960x540": 250,
+      "1398x1048": 30,
+      "1344x756": 1,
+      "1389x1042": 1,
+      "480x360": 1
+    },
+    "class_balance": {
+      "car": 144867,
+      "pedestrian": 79337,
+      "motor": 29647,
+      "people": 27059,
+      "van": 24956,
+      "truck": 12875,
+      "bicycle": 10480,
+      "bus": 5926,
+      "tricycle": 4812,
+      "awning-tricycle": 3246
+    }
+  },
+  "config": {
+    "weights": "runs/n_1024/weights/best.pt",
+    "data": "VisDrone.yaml",
+    "imgsz": 1024,
+    "split": "train"
+  }
+}

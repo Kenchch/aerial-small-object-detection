@@ -212,14 +212,18 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         medium = ((px640 >= 32 * 32) & (px640 < 96 * 96)).mean() * 100
         large = (px640 >= 96 * 96).mean() * 100
     else:
-        small = medium = large = float("nan")
+        # None, not nan: this lands in the committed JSON, and json.dumps
+        # writes a bare NaN token, which Python reads back but jq,
+        # JSON.parse, Go and Rust all reject. None serialises to null.
+        small = medium = large = None
 
     print(f"\n{'=' * 66}")
     print(f"  Ground-truth object scale  ({split} split, {len(areas):,} boxes)")
     print(f"{'=' * 66}")
-    print(f"  small  (<32x32 px @640)  : {small:5.1f} %")
-    print(f"  medium (32-96 px @640)   : {medium:5.1f} %")
-    print(f"  large  (>96x96 px @640)  : {large:5.1f} %")
+    fmt = lambda v: "  n/a" if v is None else f"{v:5.1f}"
+    print(f"  small  (<32x32 px @640)  : {fmt(small)} %")
+    print(f"  medium (32-96 px @640)   : {fmt(medium)} %")
+    print(f"  large  (>96x96 px @640)  : {fmt(large)} %")
     print(f"  median box area          : {np.median(areas) * 100:.4f} % of frame")
 
     if px_area_640 and px_area_imgsz:
@@ -247,9 +251,9 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         "boxes": len(areas),
         "images": len(files),
         "share_pct_coco_at_640": {
-            "small_lt_32x32px": round(float(small), 1),
-            "medium_32_to_96px": round(float(medium), 1),
-            "large_gt_96x96px": round(float(large), 1),
+            "small_lt_32x32px": None if small is None else round(float(small), 1),
+            "medium_32_to_96px": None if medium is None else round(float(medium), 1),
+            "large_gt_96x96px": None if large is None else round(float(large), 1),
         },
         "median_box_area_pct_of_frame": round(float(np.median(areas)) * 100, 4),
         "median_box_side_px": {
@@ -270,13 +274,29 @@ def main() -> None:
                         "trained at (this project's default); evaluating a "
                         "1024px-trained model at a different size is valid "
                         "but not what the committed numbers reflect.")
-    p.add_argument("--split", default="val")
+    p.add_argument("--split", default="val",
+                   help="Which split's labels to characterise. Accuracy is "
+                        "only reported for 'val' -- scoring the model on the "
+                        "data it was fitted to would be a misleading number to "
+                        "publish, so other splits emit label statistics only.")
     p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
-    p.add_argument("--out", type=Path, default=REPORTS_DIR / "evaluation.json")
+    p.add_argument("--out", type=Path, default=None,
+                   help="Defaults to reports/evaluation.json for the val "
+                        "split and reports/evaluation_<split>.json otherwise, "
+                        "so a second split cannot silently overwrite the first.")
     args = p.parse_args()
 
+    if args.out is None:
+        args.out = REPORTS_DIR / (
+            "evaluation.json" if args.split == "val"
+            else f"evaluation_{args.split}.json"
+        )
+
     report = {
-        "accuracy": per_class_table(args.weights, args.data, args.imgsz, args.device),
+        "accuracy": (
+            per_class_table(args.weights, args.data, args.imgsz, args.device)
+            if args.split == "val" else None
+        ),
         "label_scale": label_size_distribution(args.data, args.split, args.imgsz),
         "config": {
             "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
@@ -289,7 +309,11 @@ def main() -> None:
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, indent=2))
+    # allow_nan=False: this file exists to be quoted, so it has to be readable
+    # by something other than Python. Any NaN/Infinity that reaches here is a
+    # bug in a metric, and failing loudly beats emitting a file that jq and
+    # JSON.parse reject.
+    args.out.write_text(json.dumps(report, indent=2, allow_nan=False))
     print(f"\n  metrics -> {args.out}")
 
 
