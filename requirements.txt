@@ -16,9 +16,15 @@ onnx==1.22.0
 onnxslim==0.1.94
 onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
 
-# Every version here is the one present in the conda env that produced the
-# committed numbers, read from that env rather than chosen. That includes
-# numpy 2.x: this project runs on it, so pinning back to 1.26 would pin a
+# Read from the conda env this project runs in, not chosen -- and that env
+# reproduces the committed metrics exactly (mAP50 0.3748 / mAP50-95 0.2216 from
+# src/evaluate.py), which is the property worth claiming. Whether it is
+# byte-for-byte the env of the original training run is not something the repo
+# can prove, so it is not claimed.
+#
+# Note numpy is 2.x. The tempting pin is 1.26, on the theory that 2.x breaks
+# ultralytics and opencv wheels; this project demonstrably runs on 2.4.4
+# alongside the torch 2.6.0 pin above, so pinning back would pin a
 # configuration none of the published figures were measured under.
 opencv-python==5.0.0.93
 numpy==2.4.4
