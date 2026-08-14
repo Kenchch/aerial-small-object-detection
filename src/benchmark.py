@@ -25,6 +25,7 @@ Usage
 
 import argparse
 import json
+import math
 import statistics
 import time
 from pathlib import Path
@@ -42,12 +43,21 @@ TIMED_ITERS = 100
 
 
 def _summarise(times_ms: list[float]) -> dict:
-    """Median / p95 / throughput from a list of per-iteration latencies."""
+    """Median / p95 / throughput from a list of per-iteration latencies.
+
+    p95 is nearest-rank: ceil(0.95*n), not int(0.95*n). The two agree whenever
+    0.95*n happens to be a whole number -- which it is at the TIMED_ITERS=100
+    this script actually runs, so the committed benchmark.json is unaffected --
+    and disagree by one rank everywhere else, always downward. Since the whole
+    point of reporting p95 alongside the median is to expose the tail, a
+    formula that quietly understates the tail on any other sample size is the
+    wrong one to leave in place for the next person who changes TIMED_ITERS.
+    """
     times_ms = sorted(times_ms)
     median = statistics.median(times_ms)
     return {
         "median_ms": round(median, 2),
-        "p95_ms": round(times_ms[int(0.95 * len(times_ms)) - 1], 2),
+        "p95_ms": round(times_ms[math.ceil(0.95 * len(times_ms)) - 1], 2),
         "min_ms": round(times_ms[0], 2),
         "fps": round(1000.0 / median, 1),
     }
