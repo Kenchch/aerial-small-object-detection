@@ -1,6 +1,13 @@
 # CUDA 12.4 to match the pinned onnxruntime-gpu==1.20.2 build (see README
 # engineering note 4). Run with `docker run --gpus all ...`.
-FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+#
+# The torch minor has to match requirements.txt's pin, not just the CUDA line.
+# The sed below drops torch from the pip install so the base image's cu124 build
+# survives -- which means, inside this container, the base image tag *is* the
+# torch version. A 2.4.1 base under a `torch==2.6.0` requirements file gives a
+# container that quietly disagrees with the file the README calls the single
+# source of truth for versions.
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 WORKDIR /workspace
 

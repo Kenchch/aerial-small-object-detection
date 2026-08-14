@@ -5,12 +5,22 @@
 torch==2.6.0
 torchvision==0.21.0
 
-ultralytics
-onnx
-onnxslim
+# ultralytics is pinned for the same reason torch is, and matters more: it owns
+# the training loop, the augmentation defaults this project deliberately does
+# not override, the letterbox implementation the label-scale analysis depends
+# on, and the .val() pass that produces every mAP figure in the README. An
+# unpinned ultralytics means the committed metrics are reproducible only by
+# whoever installs on the same day.
+ultralytics==8.4.110
+onnx==1.22.0
+onnxslim==0.1.94
 onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
 
-opencv-python
-numpy
-Pillow
-PyYAML
+# Every version here is the one present in the conda env that produced the
+# committed numbers, read from that env rather than chosen. That includes
+# numpy 2.x: this project runs on it, so pinning back to 1.26 would pin a
+# configuration none of the published figures were measured under.
+opencv-python==5.0.0.93
+numpy==2.4.4
+Pillow==12.2.0
+PyYAML==6.0.3
