@@ -36,6 +36,19 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 # a tracking overlay is identity persistence.
 
 
+def association_remainders(t_infer, t_pre, t_fwd, t_post):
+    """Per-frame time inside model.track() that Ultralytics does not attribute.
+
+    Returned per frame so callers can take an order statistic of a real
+    quantity. Taking `median(t_infer) - (median(t_pre)+median(t_fwd)+median(t_post))`
+    instead subtracts four medians that are generally attained on four different
+    frames, producing a number no frame ever exhibited - and one that can come
+    out negative even when every frame's own remainder is positive.
+    """
+    return [ti - (p + f + po)
+            for ti, p, f, po in zip(t_infer, t_pre, t_fwd, t_post, strict=True)]
+
+
 def track_colour(track_id: int) -> tuple:
     """Stable pseudo-random BGR colour per track id."""
     import numpy as np
@@ -55,13 +68,34 @@ def frame_source(source: Path):
         )
         if not files:
             raise SystemExit(f"no images in {source}")
+        # cv2.imread returns None for an unreadable or corrupt file rather than
+        # raising. Reading files[0] purely for its dimensions therefore died
+        # with `AttributeError: 'NoneType' object has no attribute 'shape'` -
+        # an error naming neither the file nor the reason.
         first = cv2.imread(str(files[0]))
+        if first is None:
+            raise SystemExit(
+                f"cannot decode {files[0]} - it is the first frame, and its dimensions "
+                "define the output video. Remove or repair it and re-run."
+            )
         h, w = first.shape[:2]
         yield None, 10.0, (w, h)  # header: assume 10 fps for an image sequence
-        for f in files:
-            img = cv2.imread(str(f))
-            if img is not None:
-                yield img, None, None
+        # `first` is reused rather than decoded a second time: files[0] used to
+        # be read twice, once before the loop and once inside it, so one full
+        # decode landed outside the profiled region and both wall_s and
+        # t_decode[0] under-counted it.
+        skipped = []
+        for i, f in enumerate(files):
+            img = first if i == 0 else cv2.imread(str(f))
+            if img is None:
+                # Dropping these silently made `frames` disagree with the file
+                # count on disk with nothing in the report to explain the gap.
+                skipped.append(f.name)
+                continue
+            yield img, None, None
+        if skipped:
+            print(f"[warn] skipped {len(skipped)} undecodable image(s): "
+                  f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}")
     else:
         cap = cv2.VideoCapture(str(source))
         if not cap.isOpened():
@@ -224,10 +258,18 @@ def main() -> None:
 
     # Association is not timed directly -- Ultralytics runs the tracker inside
     # the same call and does not report it -- so take it as the remainder of
-    # the measured call after its own three reported phases. On the medians
-    # that also absorbs Python-level call overhead, which is why it is named
-    # for both rather than presented as a clean ByteTrack number.
-    assoc_median = med(t_infer) - (med(t_pre) + med(t_fwd) + med(t_post))
+    # the measured call after its own three reported phases. That remainder also
+    # absorbs Python-level call overhead, which is why it is named for both
+    # rather than presented as a clean ByteTrack number.
+    #
+    # Compute it per frame and take the median of THAT, not the difference of
+    # four separate medians. The medians of four series are generally not
+    # attained on the same frame, so their difference is not a quantity any
+    # frame exhibited; it can even come out negative while every individual
+    # frame's remainder is positive. The per-frame form is a real order
+    # statistic of a real quantity, and it degrades safely when Ultralytics
+    # reports a phase inconsistently.
+    assoc_median = med(association_remainders(t_infer, t_pre, t_fwd, t_post))
 
     report = {
         "frames": n_frames,

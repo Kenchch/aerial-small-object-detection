@@ -69,6 +69,14 @@ def parse_args() -> argparse.Namespace:
                         "Ultralytics restores optimizer state, EMA and epoch "
                         "counter from the checkpoint, so this is not the same "
                         "as fine-tuning from last.pt with a fresh optimizer.")
+    p.add_argument("--overwrite", action="store_true",
+                   help="Allow an existing runs/<name>/ to be written into. Off by "
+                        "default: the README documents `--name n_1024`, which is "
+                        "also the run whose results.csv, plots and metrics this "
+                        "repo publishes, so running the documented command a "
+                        "second time silently overwrote the evidence behind every "
+                        "number in the README. Use a new --name, or pass this "
+                        "flag deliberately.")
     return p.parse_args()
 
 
@@ -88,6 +96,15 @@ def main() -> None:
         print(f"\n=== RESUMED RUN COMPLETE ===\nmAP50-95 : {results.box.map:.4f}")
         return
 
+    run_dir = RUNS_DIR / args.name
+    if run_dir.exists() and not args.overwrite:
+        raise SystemExit(
+            f"{run_dir} already exists. The published metrics, plots and results.csv "
+            f"for this project live under runs/n_1024/, and training into an existing "
+            f"directory overwrites them in place. Pass a different --name, or "
+            f"--overwrite if replacing that run is what you intend."
+        )
+
     model = YOLO(args.model)
 
     results = model.train(
@@ -102,6 +119,10 @@ def main() -> None:
         patience=args.patience,
         project=str(RUNS_DIR),
         name=args.name,
+        # exist_ok stays True so Ultralytics writes into runs/<name>/ rather
+        # than silently inventing runs/<name>2/. The guard above is what makes
+        # that safe: reaching this line means the directory is new, or the
+        # operator asked for it with --overwrite.
         exist_ok=True,
         # --- Augmentation -------------------------------------------------
         # Ultralytics' defaults (fliplr=0.5, scale=0.5, mosaic=1.0,

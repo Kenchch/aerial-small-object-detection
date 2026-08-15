@@ -31,6 +31,52 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
+def error_split(cm, names: dict) -> dict:
+    """Decompose each true class's outcome into correct / missed / misclassified.
+
+    `cm` is Ultralytics' confusion matrix: rows are Predicted, columns are True,
+    with one extra trailing row/column for background. Columns are normalised
+    here, so each class's three shares sum to 1.
+
+    Pulled out of per_class_table so it can be tested without a GPU, a dataset
+    or a trained checkpoint - it was previously unreachable by any test, while
+    being the source of a ten-row table in the README.
+
+    Column ordering follows `names` positionally, which is Ultralytics' own
+    invariant: check_class_names rejects any names dict whose max key is >= n,
+    and both utils/metrics.py and utils/plotting.py index this same matrix by
+    position while labelling axes with list(names.values()).
+    """
+    col = cm.sum(axis=0)
+    out = {}
+    for j, name in enumerate(names.values()):
+        if not col[j]:
+            continue
+        correct = cm[j, j] / col[j]
+        out[name] = {
+            "correct": round(float(correct), 3),
+            "missed_as_background": round(float(cm[-1, j] / col[j]), 3),
+            "misclassified": round(float(cm[:-1, j].sum() / col[j] - correct), 3),
+            "top_confusion": max(
+                ((n2, cm[i, j] / col[j]) for i, n2 in enumerate(names.values()) if i != j),
+                key=lambda kv: kv[1], default=(None, 0.0),
+            )[0],
+        }
+    return out
+
+
+def letterbox_scale(W: int, H: int, imgsz: int) -> float:
+    """The single factor YOLO's letterbox applies to BOTH axes.
+
+    Ultralytics scales an image uniformly so its long side reaches `imgsz` and
+    pads the short side; it does not stretch to imgsz x imgsz. A box's rendered
+    pixel area therefore depends on its source image's aspect ratio, which is
+    why the label-scale analysis reads each image's real dimensions instead of
+    assuming one shape for the split.
+    """
+    return imgsz / max(W, H)
+
+
 def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> dict:
     from ultralytics import YOLO
 
@@ -61,23 +107,7 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
     # plotted confusion matrix carries this, but reading it off the image is
     # error-prone -- the axes are Predicted x True and the interesting cells
     # are off-diagonal -- so emit it as numbers the README can cite directly.
-    cm = m.confusion_matrix.matrix          # rows=Predicted, cols=True
-    col = cm.sum(axis=0)
-    confusion = {}
-    for j, name in enumerate(names.values()):
-        if not col[j]:
-            continue
-        correct = cm[j, j] / col[j]
-        missed = cm[-1, j] / col[j]
-        confusion[name] = {
-            "correct": round(float(correct), 3),
-            "missed_as_background": round(float(missed), 3),
-            "misclassified": round(float(cm[:-1, j].sum() / col[j] - correct), 3),
-            "top_confusion": max(
-                ((n2, cm[i, j] / col[j]) for i, n2 in enumerate(names.values()) if i != j),
-                key=lambda kv: kv[1], default=(None, 0.0),
-            )[0],
-        }
+    confusion = error_split(m.confusion_matrix.matrix, names)
 
     worst = min(rows, key=lambda x: x[4])
     best = max(rows, key=lambda x: x[4])
@@ -180,8 +210,8 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
             if W and H:
                 # Letterbox scales both axes by the SAME factor (long side ->
                 # target), unlike stretching to a imgsz x imgsz square.
-                s640 = 640 / max(W, H)
-                s_imgsz = imgsz / max(W, H)
+                s640 = letterbox_scale(W, H, 640)
+                s_imgsz = letterbox_scale(W, H, imgsz)
                 px_area_640.append((w_n * W * s640) * (h_n * H * s640))
                 px_area_imgsz.append((w_n * W * s_imgsz) * (h_n * H * s_imgsz))
 
