@@ -1,0 +1,153 @@
+"""Unit tests for the metric cores that produce numbers the README cites.
+
+These functions used to be inline inside `per_class_table` / `main`, which made
+them reachable only through ultralytics, a GPU, the VisDrone dataset and a
+trained checkpoint - i.e. unreachable by any test. A README table nobody can
+test is a README table nobody can trust, so the arithmetic was pulled out into
+pure functions and is pinned here with synthetic inputs.
+"""
+import numpy as np
+import pytest
+
+from evaluate import error_split, letterbox_scale
+from track import association_remainders
+
+
+# --- confusion-matrix decomposition ---------------------------------------- #
+
+def _cm(rows):
+    """Ultralytics layout: rows=Predicted, cols=True, last row/col = background."""
+    return np.array(rows, dtype=float)
+
+
+def test_error_split_components_sum_to_one_per_class():
+    """Each column is normalised by its own total, so a true class's outcome
+    splits exactly three ways. If it does not, one of the three is wrong."""
+    names = {0: "car", 1: "bus"}
+    cm = _cm([[70, 10, 0],      # predicted car
+              [20, 60, 0],      # predicted bus
+              [10, 30, 0]])     # predicted background (i.e. missed)
+    got = error_split(cm, names)
+    for cls in ("car", "bus"):
+        total = (got[cls]["correct"] + got[cls]["missed_as_background"]
+                 + got[cls]["misclassified"])
+        assert total == pytest.approx(1.0, abs=1e-3), f"{cls} splits to {total}"
+
+
+def test_error_split_values_are_column_normalised():
+    names = {0: "car", 1: "bus"}
+    cm = _cm([[70, 10, 0],
+              [20, 60, 0],
+              [10, 30, 0]])
+    got = error_split(cm, names)
+    assert got["car"]["correct"] == pytest.approx(0.70)          # 70/100
+    assert got["car"]["missed_as_background"] == pytest.approx(0.10)
+    assert got["car"]["misclassified"] == pytest.approx(0.20)    # the 20 predicted bus
+    assert got["bus"]["correct"] == pytest.approx(0.60)          # 60/100
+    assert got["bus"]["missed_as_background"] == pytest.approx(0.30)
+
+
+def test_error_split_names_the_dominant_confusion_not_background():
+    """`top_confusion` answers "when it is wrong, what does it say instead?".
+    Background is reported separately as missed_as_background, so including it
+    here would let a missing-limited class report 'background' and hide the
+    class it is actually being confused with."""
+    names = {0: "car", 1: "bus", 2: "truck"}
+    cm = _cm([[10, 0, 5],       # predicted car
+              [0, 10, 25],      # predicted bus   <- truck mostly goes here
+              [0, 0, 10],       # predicted truck
+              [0, 0, 60]])      # background      <- numerically the largest cell
+    got = error_split(cm, names)
+    assert got["truck"]["top_confusion"] == "bus"
+    assert got["truck"]["missed_as_background"] == pytest.approx(0.60)
+
+
+def test_error_split_skips_classes_with_no_true_instances():
+    """A class absent from the split has an all-zero column; dividing by it
+    would emit nan into a JSON file written with allow_nan=False."""
+    names = {0: "car", 1: "ghost"}
+    cm = _cm([[50, 0, 0],
+               [0, 0, 0],
+               [10, 0, 0]])
+    got = error_split(cm, names)
+    assert "ghost" not in got and "car" in got
+    assert all(np.isfinite(v) for v in got["car"].values() if isinstance(v, float))
+
+
+def test_error_split_reproduces_the_committed_report():
+    """Guards the layout convention (rows=Predicted, cols=True). Transposing it
+    still produces plausible-looking numbers that sum to 1, so only a fixed
+    expectation catches it."""
+    names = {0: "car", 1: "van"}
+    cm = _cm([[713, 194, 0],
+              [194, 341, 0],
+              [93, 465, 0]])
+    got = error_split(cm, names)
+    assert got["car"]["correct"] == pytest.approx(0.713, abs=1e-3)
+    assert got["van"]["correct"] == pytest.approx(0.341, abs=1e-3)
+    assert got["van"]["top_confusion"] == "car"
+
+
+# --- letterbox geometry ----------------------------------------------------- #
+
+@pytest.mark.parametrize("W,H,imgsz,expected", [
+    (1920, 1080, 640, 640 / 1920),     # 16:9, the whole val split
+    (2000, 1500, 640, 640 / 2000),     # 4:3, present in train
+    (1360, 765, 1024, 1024 / 1360),
+    (640, 640, 640, 1.0),              # already square
+    (480, 960, 640, 640 / 960),        # portrait: long side is H
+])
+def test_letterbox_scale_uses_the_long_side(W, H, imgsz, expected):
+    assert letterbox_scale(W, H, imgsz) == pytest.approx(expected)
+
+
+def test_letterbox_never_upscales_the_short_side_independently():
+    """The bug this pins: scaling each axis to imgsz separately (a stretch)
+    instead of both by one factor (a letterbox). For a 16:9 frame the two differ
+    by 1.78x on the vertical, which is what made the naive `sqrt(area)*imgsz`
+    box-size estimate overstate small objects."""
+    W, H, imgsz = 1920, 1080, 640
+    s = letterbox_scale(W, H, imgsz)
+    assert W * s == pytest.approx(640)      # long side reaches the target
+    assert H * s == pytest.approx(360)      # short side is padded, not stretched
+    assert H * s < imgsz
+
+
+def test_letterbox_area_matches_the_committed_median_box():
+    """reports/evaluation.json records a median box of 11.3 px at 640 and
+    18.0 px at 1024, from a median area of 0.0552% of frame on a 16:9 split."""
+    W, H = 1920, 1080
+    area_frac = 0.000552
+    for imgsz, expected_side in ((640, 11.3), (1024, 18.0)):
+        s = letterbox_scale(W, H, imgsz)
+        px_area = (np.sqrt(area_frac) * W * s) * (np.sqrt(area_frac) * H * s)
+        assert np.sqrt(px_area) == pytest.approx(expected_side, abs=0.1)
+
+
+# --- association remainder --------------------------------------------------- #
+
+def test_association_remainder_is_per_frame_not_a_difference_of_medians():
+    """The case that motivated the change. Each frame has exactly one cheap
+    phase, so every series' median is high while every frame's total is
+    identical - and the sum of the three medians then exceeds the median of the
+    total. Every frame's own remainder is +2.0 ms; the old formula reports
+    -8.0 ms of association, a negative duration no frame exhibited."""
+    t_pre = [0.0, 10.0, 10.0]
+    t_fwd = [10.0, 0.0, 10.0]
+    t_post = [10.0, 10.0, 0.0]
+    t_infer = [p + f + po + 2.0 for p, f, po in zip(t_pre, t_fwd, t_post)]
+
+    rem = association_remainders(t_infer, t_pre, t_fwd, t_post)
+    assert rem == [2.0, 2.0, 2.0]
+    assert float(np.median(rem)) == 2.0
+
+    old = np.median(t_infer) - (np.median(t_pre) + np.median(t_fwd) + np.median(t_post))
+    assert old < 0, "the old formula should be visibly wrong on this input"
+
+
+def test_association_remainder_rejects_ragged_inputs():
+    """These four series come off the same per-frame loop and must be the same
+    length; silently zipping to the shortest would drop frames from the profile
+    rather than report that something went wrong collecting it."""
+    with pytest.raises(ValueError):
+        association_remainders([1.0, 2.0], [0.1], [0.1, 0.2], [0.1, 0.2])
