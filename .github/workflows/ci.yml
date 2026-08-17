@@ -26,10 +26,16 @@ jobs:
       # ultralytics and cv2 UNIMPORTABLE and asserts every --help still exits 0,
       # and the metric tests drive pure functions on synthetic input. Installing
       # a CUDA stack here would take minutes and weaken the guarantee.
+      # numpy IS installed; torch, ultralytics, opencv and CUDA are not. That
+      # is the line the bare-clone guarantee actually draws: the metric tests
+      # compute on arrays, so they need numpy, while test_cli.py makes torch,
+      # ultralytics and cv2 unimportable and asserts every --help still exits 0.
+      # Locally numpy was always present via conda, so the first CI run was
+      # what established that the distinction had never been tested.
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install pytest ruff pip-audit
+          pip install pytest ruff pip-audit numpy
 
       - name: Lint
         run: ruff check .
