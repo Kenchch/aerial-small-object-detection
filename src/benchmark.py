@@ -64,28 +64,53 @@ def _summarise(times_ms: list[float]) -> dict:
 
 
 def bench_pytorch(weights: Path, imgsz: int, device: str = "cuda") -> dict:
-    """Latency of the raw PyTorch model -- the pre-optimisation reference."""
+    """Latency of the raw PyTorch model, in two regimes.
+
+    `core` feeds a tensor already resident in VRAM and leaves the output there.
+    `transfer_inclusive` starts from a CPU tensor and brings the output back,
+    so it pays the host-to-device and device-to-host copies.
+
+    Both are reported because comparing one against the other is the easiest
+    way to draw a wrong conclusion here. ONNX Runtime's `sess.run` takes a
+    numpy array and returns numpy arrays, so it is transfer-inclusive by
+    construction; timing that against a GPU-resident PyTorch forward charges
+    ONNX for ~2 ms of copying that PyTorch never does, and understates the
+    export's real advantage roughly threefold.
+    """
     import torch
     from ultralytics import YOLO
 
     model = YOLO(str(weights)).model.fuse().eval().to(device)
-    dummy = torch.randn(1, 3, imgsz, imgsz, device=device)
+    cuda = device == "cuda"
 
-    with torch.no_grad():
-        for _ in range(WARMUP_ITERS):
-            model(dummy)
-        if device == "cuda":
-            torch.cuda.synchronize()
+    def run(fn) -> dict:
+        with torch.no_grad():
+            for _ in range(WARMUP_ITERS):
+                fn()
+            if cuda:
+                torch.cuda.synchronize()
+            times = []
+            for _ in range(TIMED_ITERS):
+                start = time.perf_counter()
+                fn()
+                if cuda:
+                    torch.cuda.synchronize()  # see module docstring
+                times.append((time.perf_counter() - start) * 1000)
+        return _summarise(times)
 
-        times = []
-        for _ in range(TIMED_ITERS):
-            start = time.perf_counter()
-            model(dummy)
-            if device == "cuda":
-                torch.cuda.synchronize()  # see module docstring
-            times.append((time.perf_counter() - start) * 1000)
+    resident = torch.randn(1, 3, imgsz, imgsz, device=device)
+    on_host = torch.randn(1, 3, imgsz, imgsz)
 
-    return _summarise(times)
+    def core():
+        model(resident)
+
+    def transfer_inclusive():
+        out = model(on_host.to(device))
+        # .cpu() on the first output is the device-to-host half; without it
+        # only the upload would be counted.
+        out[0].cpu() if isinstance(out, (list, tuple)) else out.cpu()
+
+    return {"core": run(core), "transfer_inclusive": run(transfer_inclusive)}
 
 
 def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
@@ -112,16 +137,55 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     name = sess.get_inputs()[0].name
     dummy = np.random.randn(1, 3, imgsz, imgsz).astype(np.float32)
 
-    for _ in range(WARMUP_ITERS):
-        sess.run(None, {name: dummy})
+    def run(fn) -> dict:
+        for _ in range(WARMUP_ITERS):
+            fn()
+        times = []
+        for _ in range(TIMED_ITERS):
+            start = time.perf_counter()
+            fn()
+            times.append((time.perf_counter() - start) * 1000)
+        return _summarise(times)
 
-    times = []
-    for _ in range(TIMED_ITERS):
-        start = time.perf_counter()
-        sess.run(None, {name: dummy})
-        times.append((time.perf_counter() - start) * 1000)
+    transfer_inclusive = run(lambda: sess.run(None, {name: dummy}))
+    if provider != "CUDAExecutionProvider":
+        # On CPU there is no copy to separate out; the two regimes coincide.
+        return {"core": transfer_inclusive, "transfer_inclusive": transfer_inclusive}
 
-    return _summarise(times)
+    # IOBinding keeps input and output on the device, which is the like-for-like
+    # counterpart to PyTorch's GPU-resident measurement.
+    binding = sess.io_binding()
+    gpu_in = ort.OrtValue.ortvalue_from_numpy(dummy, "cuda", 0)
+    binding.bind_input(name, "cuda", 0, np.float32, gpu_in.shape(), gpu_in.data_ptr())
+    for out in sess.get_outputs():
+        binding.bind_output(out.name, "cuda", 0)
+    core = run(lambda: sess.run_with_iobinding(binding))
+    return {"core": core, "transfer_inclusive": transfer_inclusive}
+
+
+def _environment(imgsz: int) -> dict:
+    """What a latency figure needs alongside it to mean anything.
+
+    Milliseconds without the GPU, the driver stack and the iteration counts are
+    a number nobody can reproduce or compare against their own hardware.
+    """
+    import onnxruntime as ort
+    import torch
+
+    env = {
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+        "torch": torch.__version__,
+        "onnxruntime": ort.__version__,
+        "providers": ort.get_available_providers(),
+        "imgsz": imgsz,
+        "batch_size": 1,
+        "warmup_iters": WARMUP_ITERS,
+        "timed_iters": TIMED_ITERS,
+        "statistic": "median and p95 over timed_iters, warmup discarded",
+    }
+    return env
 
 
 def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
@@ -171,6 +235,7 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
     print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
+    row["environment"] = _environment(imgsz)
     return row
 
 
@@ -194,13 +259,18 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(row, indent=2))
 
-    torch_cuda = row.get("pytorch_cuda", {}).get("median_ms")
-    onnx_cuda = row.get("onnx_cuda", {}).get("median_ms")
+    def med(key: str, regime: str) -> str:
+        v = row.get(key, {}).get(regime, {}).get("median_ms")
+        return "n/a" if v is None else f"{v:.2f} ms"
+
     print(f"\n{'=' * 60}")
     print(f"imgsz {row['imgsz']}   mAP50 {row['mAP50']}   mAP50-95 {row['mAP50_95']}")
-    print(f"PyTorch CUDA : {'n/a' if torch_cuda is None else f'{torch_cuda:.2f} ms'}")
-    print(f"ONNX  CUDA   : {'n/a' if onnx_cuda is None else f'{onnx_cuda:.2f} ms'}")
-    print(f"ONNX  CPU    : {row['onnx_cpu']['median_ms']:.2f} ms")
+    print(f"{'':16}{'core':>12}{'+transfer':>12}")
+    for label, key in (("PyTorch CUDA", "pytorch_cuda"),
+                       ("ONNX  CUDA", "onnx_cuda"),
+                       ("ONNX  CPU", "onnx_cpu")):
+        print(f"{label:16}{med(key, 'core'):>12}{med(key, 'transfer_inclusive'):>12}")
+    print("core = in/out resident on device; +transfer = CPU in, CPU out")
     print(f"\nsaved -> {args.out}")
 
 

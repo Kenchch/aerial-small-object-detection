@@ -3,22 +3,63 @@
   "mAP50": 0.3748,
   "mAP50_95": 0.2216,
   "pytorch_cuda": {
-    "median_ms": 12.22,
-    "p95_ms": 13.93,
-    "min_ms": 10.68,
-    "fps": 81.9
+    "core": {
+      "median_ms": 12.15,
+      "p95_ms": 13.45,
+      "min_ms": 11.24,
+      "fps": 82.3
+    },
+    "transfer_inclusive": {
+      "median_ms": 14.76,
+      "p95_ms": 16.28,
+      "min_ms": 13.94,
+      "fps": 67.8
+    }
   },
   "onnx_size_mb": 10.37,
   "onnx_cuda": {
-    "median_ms": 11.18,
-    "p95_ms": 14.94,
-    "min_ms": 10.55,
-    "fps": 89.5
+    "core": {
+      "median_ms": 9.57,
+      "p95_ms": 10.76,
+      "min_ms": 8.96,
+      "fps": 104.5
+    },
+    "transfer_inclusive": {
+      "median_ms": 11.85,
+      "p95_ms": 13.46,
+      "min_ms": 10.93,
+      "fps": 84.4
+    }
   },
   "onnx_cpu": {
-    "median_ms": 100.2,
-    "p95_ms": 127.98,
-    "min_ms": 81.36,
-    "fps": 10.0
+    "core": {
+      "median_ms": 103.92,
+      "p95_ms": 119.05,
+      "min_ms": 92.72,
+      "fps": 9.6
+    },
+    "transfer_inclusive": {
+      "median_ms": 103.92,
+      "p95_ms": 119.05,
+      "min_ms": 92.72,
+      "fps": 9.6
+    }
+  },
+  "environment": {
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "cuda": "12.4",
+    "cudnn": 90100,
+    "torch": "2.6.0+cu124",
+    "onnxruntime": "1.20.2",
+    "providers": [
+      "TensorrtExecutionProvider",
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "imgsz": 1024,
+    "batch_size": 1,
+    "warmup_iters": 20,
+    "timed_iters": 100,
+    "statistic": "median and p95 over timed_iters, warmup discarded"
   }
 }

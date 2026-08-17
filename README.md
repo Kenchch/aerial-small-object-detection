@@ -182,22 +182,34 @@ A detector benchmarked on mAP alone says nothing about whether it fits a
 latency budget, so the trained model is exported to ONNX and timed against the
 raw PyTorch model across backends.
 
-| backend | median latency | FPS |
+| backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.22 ms | 81.9 |
-| ONNX Runtime (CUDA) | **11.18 ms** | 89.5 |
-| ONNX Runtime (CPU) | 100.20 ms | 10.0 |
+| PyTorch (CUDA, eager) | 12.15 ms · 82.3 FPS | 14.76 ms · 67.8 FPS |
+| ONNX Runtime (CUDA) | **9.57 ms · 104.5 FPS** | **11.85 ms · 84.4 FPS** |
+| ONNX Runtime (CPU) | 103.92 ms · 9.6 FPS | 103.92 ms · 9.6 FPS |
 
-Median of 100 timed iterations after 20 warmup iterations, with
-`torch.cuda.synchronize()` before each stop — GPU work is asynchronous, so
-timing without it measures kernel *launch*, not the kernel. ONNX export gives
-a modest ~8 % speedup over eager PyTorch on GPU here — 1.04 ms, and see the
-tracking section below for why that is the smaller prize. The more decisive
-number is CPU, roughly **8–9× slower** than either GPU path — the case for
-keeping inference on a GPU-equipped edge device rather than falling back to
-CPU. Eager PyTorch and ONNX-CPU are both sensitive to host load; these were
-measured in the same session as the tracking profile below, so the two
-sections are directly comparable.
+**Two regimes, because comparing across them is how this gets read wrong.**
+`core` feeds a tensor already resident in VRAM and leaves the output there.
+`+ host transfer` starts from a CPU array and brings the output back.
+ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
+by construction; timing that against a GPU-resident PyTorch forward — which is
+what this table used to do — charges ONNX ~2.3 ms of copying PyTorch never
+paid, and reported the export as **8 % faster when like-for-like it is 21 %**.
+On CPU there is no copy to separate, so the two columns coincide.
+
+ONNX is 21 % faster core-to-core and 20 % transfer-to-transfer. The more
+decisive number is still CPU: **10.9× slower** than ONNX on GPU — the case for
+keeping inference on a GPU-equipped edge device rather than falling back to CPU.
+
+Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
+before each stop — GPU work is asynchronous, so timing without it measures
+kernel *launch*, not the kernel. The full environment is recorded in
+`reports/benchmark.json` alongside the numbers:
+
+```
+RTX 2070 Max-Q · CUDA 12.4 · cuDNN 9.1.0 · torch 2.6.0+cu124
+onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
+```
 
 The GPU path used above is a genuine CUDA execution — worth stating because
 ONNX Runtime can silently substitute CPU for a missing CUDA library and still
@@ -246,8 +258,8 @@ with the median total is not the frame with the median preprocess time.
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (33.87 ms) is not the same measurement as the 12.22 ms
-PyTorch row in the backend table above, and the 21.65 ms between them is the
+**`detect + track` (33.87 ms) is not the same measurement as the 12.15 ms
+PyTorch core row in the backend table above, and the 21.72 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -260,11 +272,11 @@ per-call Python overhead too.)
 **The forward pass is 39 % of this stage. Preprocessing and association are
 another 52 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 1.04 ms on the forward pass, while 20.58 ms per frame sits in the
+buys 2.58 ms on the forward pass, while 20.58 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 12.22 → 13.29 ms difference on the forward pass itself is
+The remaining 12.15 → 13.29 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
