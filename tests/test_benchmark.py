@@ -4,6 +4,7 @@ benchmark.py defers its torch/ultralytics imports into the functions that use
 them, so this module imports cleanly with nothing but the standard library --
 no skip guard needed, and these run on a bare clone.
 """
+
 import math
 
 import pytest
@@ -39,7 +40,7 @@ def test_p95_never_understates_the_tail(n):
     """The old index, int(0.95*n)-1, agreed with nearest-rank only when 0.95*n
     landed on a whole number - true at TIMED_ITERS=100, false at 5/10/30/50,
     where it silently reported the next value down."""
-    times = [float(i) for i in range(1, n + 1)]          # 1..n, already sorted
-    expected = float(math.ceil(0.95 * n))                # nearest-rank value
+    times = [float(i) for i in range(1, n + 1)]  # 1..n, already sorted
+    expected = float(math.ceil(0.95 * n))  # nearest-rank value
     assert _summarise(times)["p95_ms"] == expected
-    assert expected >= float(int(0.95 * n))              # never below the old one
+    assert expected >= float(int(0.95 * n))  # never below the old one

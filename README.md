@@ -444,11 +444,13 @@ from ultralytics import settings
 for d in ("datasets", "runs", "weights"):
     Path(f"<path>/{d}").mkdir(parents=True, exist_ok=True)
 
-settings.update({
-    "datasets_dir": "<path>/datasets",
-    "runs_dir": "<path>/runs",
-    "weights_dir": "<path>/weights",
-})
+settings.update(
+    {
+        "datasets_dir": "<path>/datasets",
+        "runs_dir": "<path>/runs",
+        "weights_dir": "<path>/weights",
+    }
+)
 ```
 
 The dataset downloads automatically on first run.

@@ -67,11 +67,17 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--frames", type=int, default=90)
     p.add_argument("--fps", type=int, default=15)
-    p.add_argument("--out", type=Path, default=PROJECT_ROOT / "reports" / "demo_pan.mp4")
-    p.add_argument("--crop", type=float, default=0.62,
-                   help="Crop window as a fraction of the source frame. Smaller "
-                        "means more apparent motion and more objects entering "
-                        "and leaving — a harder association test.")
+    p.add_argument(
+        "--out", type=Path, default=PROJECT_ROOT / "reports" / "demo_pan.mp4"
+    )
+    p.add_argument(
+        "--crop",
+        type=float,
+        default=0.62,
+        help="Crop window as a fraction of the source frame. Smaller "
+        "means more apparent motion and more objects entering "
+        "and leaving — a harder association test.",
+    )
     args = p.parse_args()
 
     import cv2
@@ -87,15 +93,18 @@ def main() -> None:
     ow, oh = cw - (cw % 2), ch - (ch % 2)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(args.out), cv2.VideoWriter_fourcc(*"mp4v"),
-                             args.fps, (ow, oh))
+    writer = cv2.VideoWriter(
+        str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (ow, oh)
+    )
     # An unopened writer makes write() a silent no-op -- this script would
     # otherwise print "wrote ... (N frames)" and exit 0 with no output file,
     # and the failure would only surface in track.py, the next command in
     # the README's tracking walkthrough, pointing at the wrong script.
     if not writer.isOpened():
-        raise SystemExit(f"cannot open VideoWriter for {args.out} "
-                          f"(mp4v codec unavailable in this OpenCV build?)")
+        raise SystemExit(
+            f"cannot open VideoWriter for {args.out} "
+            f"(mp4v codec unavailable in this OpenCV build?)"
+        )
 
     max_dx, max_dy = W - cw, H - ch
     for i in range(args.frames):
@@ -105,14 +114,16 @@ def main() -> None:
         e = 0.5 - 0.5 * np.cos(np.pi * t)
         x = int(e * max_dx)
         y = int((0.5 - 0.5 * np.cos(2 * np.pi * t)) * max_dy)  # one vertical sweep
-        crop = img[y:y + ch, x:x + cw]
+        crop = img[y : y + ch, x : x + cw]
         writer.write(crop[:oh, :ow])
 
     writer.release()
     print(f"wrote  : {args.out}  ({args.frames} frames @ {args.fps} fps, {ow}x{oh})")
-    print("\nNOTE: synthetic camera motion over a real frame. Validates the "
-          "pipeline;\n      it is not a tracking accuracy benchmark. See module "
-          "docstring.")
+    print(
+        "\nNOTE: synthetic camera motion over a real frame. Validates the "
+        "pipeline;\n      it is not a tracking accuracy benchmark. See module "
+        "docstring."
+    )
 
 
 if __name__ == "__main__":

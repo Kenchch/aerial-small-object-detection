@@ -28,5 +28,8 @@ onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
 # configuration none of the published figures were measured under.
 opencv-python==5.0.0.93
 numpy==2.4.4
-Pillow==12.2.0
+# 12.3.0, not the 12.2.0 this env happens to hold: pip-audit reports twelve
+# advisories against 12.2.0, all fixed in 12.3.0, and Pillow is used here only
+# to read image headers so the upgrade cannot move a published number.
+Pillow==12.3.0
 PyYAML==6.0.3

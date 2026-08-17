@@ -1,5 +1,6 @@
 """Parse every script under src/ -- catches syntax errors without needing
 torch/ultralytics/opencv installed, so it runs in any environment."""
+
 import ast
 from pathlib import Path
 

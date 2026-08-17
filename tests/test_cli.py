@@ -15,6 +15,7 @@ to create, torch and ultralytics are installed, so `--help` succeeds whether the
 imports are deferred or not, and the guard silently protected nothing. Blocking
 them makes it hold in any environment, including the author's own.
 """
+
 import subprocess
 import sys
 import textwrap
@@ -51,7 +52,11 @@ def bare_env(tmp_path_factory):
 def test_help_exits_zero_without_the_heavy_deps(script, bare_env):
     proc = subprocess.run(
         [sys.executable, str(script), "--help"],
-        capture_output=True, text=True, timeout=120, env=bare_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=bare_env,
+        check=False,
     )
     assert proc.returncode == 0, (
         f"{script.name} --help exited {proc.returncode} with torch/ultralytics/cv2 "
@@ -65,7 +70,11 @@ def test_the_blocker_actually_blocks(bare_env):
     would start passing for the wrong reason and nothing would say so."""
     proc = subprocess.run(
         [sys.executable, "-c", "import torch"],
-        capture_output=True, text=True, timeout=60, env=bare_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=bare_env,
+        check=False,
     )
     assert proc.returncode != 0
     assert "deliberately unavailable" in proc.stderr
