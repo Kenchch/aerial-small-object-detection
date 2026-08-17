@@ -58,8 +58,13 @@ def error_split(cm, names: dict) -> dict:
             "missed_as_background": round(float(cm[-1, j] / col[j]), 3),
             "misclassified": round(float(cm[:-1, j].sum() / col[j] - correct), 3),
             "top_confusion": max(
-                ((n2, cm[i, j] / col[j]) for i, n2 in enumerate(names.values()) if i != j),
-                key=lambda kv: kv[1], default=(None, 0.0),
+                (
+                    (n2, cm[i, j] / col[j])
+                    for i, n2 in enumerate(names.values())
+                    if i != j
+                ),
+                key=lambda kv: kv[1],
+                default=(None, 0.0),
             )[0],
         }
     return out
@@ -100,8 +105,10 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
         print(f"{name:<22}{p:>9.3f}{r:>9.3f}{ap50:>10.3f}{ap:>12.3f}")
 
     print("-" * 66)
-    print(f"{'ALL':<22}{m.box.mp:>9.3f}{m.box.mr:>9.3f}"
-          f"{m.box.map50:>10.3f}{m.box.map:>12.3f}")
+    print(
+        f"{'ALL':<22}{m.box.mp:>9.3f}{m.box.mr:>9.3f}"
+        f"{m.box.map50:>10.3f}{m.box.map:>12.3f}"
+    )
 
     # Decompose each true class's error into missed vs misclassified. The
     # plotted confusion matrix carries this, but reading it off the image is
@@ -161,10 +168,13 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     from PIL import Image
     from ultralytics.utils import SETTINGS
 
-    data_yaml = Path(SETTINGS["datasets_dir"]) / data if not Path(data).exists() else Path(data)
+    data_yaml = (
+        Path(SETTINGS["datasets_dir"]) / data if not Path(data).exists() else Path(data)
+    )
     # Ultralytics resolves the yaml itself; locate it via its own config dir.
     if not data_yaml.exists():
         from ultralytics.utils import ROOT
+
         data_yaml = ROOT / "cfg" / "datasets" / data
     # encoding must be explicit: Python on Windows defaults to cp1252, which
     # chokes on the non-ASCII bytes in Ultralytics' bundled dataset yamls.
@@ -183,8 +193,11 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     dims_seen = Counter()
     for f in files:
         img_path = next(
-            (image_dir / f"{f.stem}{ext}" for ext in (".jpg", ".jpeg", ".png")
-             if (image_dir / f"{f.stem}{ext}").exists()),
+            (
+                image_dir / f"{f.stem}{ext}"
+                for ext in (".jpg", ".jpeg", ".png")
+                if (image_dir / f"{f.stem}{ext}").exists()
+            ),
             None,
         )
         W = H = None
@@ -221,8 +234,10 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         # instead of saying plainly that no boxes were found -- label files
         # existed (the earlier guard passed) but every one was empty (e.g.
         # an all-background split, or all lines shorter than 5 fields).
-        print(f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
-              f"but none contained a valid box -- nothing to summarise.")
+        print(
+            f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
+            f"but none contained a valid box -- nothing to summarise."
+        )
         return {}
 
     areas = np.asarray(areas)
@@ -262,13 +277,17 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         print("\n  source image dimensions seen (w x h : count):")
         for (w, h), n in dims_seen.most_common():
             print(f"    {w}x{h}  ({n})")
-        print(f"\n  -> under YOLO's letterbox resize (aspect ratio preserved, "
-              f"not stretched), a box\n     at the median covers ~{side640:.1f} px "
-              f"on a 640px input (the YOLO default),\n     and ~{side_imgsz:.1f} px "
-              f"at {imgsz}px (this project's chosen resolution).")
+        print(
+            f"\n  -> under YOLO's letterbox resize (aspect ratio preserved, "
+            f"not stretched), a box\n     at the median covers ~{side640:.1f} px "
+            f"on a 640px input (the YOLO default),\n     and ~{side_imgsz:.1f} px "
+            f"at {imgsz}px (this project's chosen resolution)."
+        )
     else:
-        print("\n  [warn] could not resolve source images -- skipping pixel "
-              "conversion (frame-area stats above are unaffected).")
+        print(
+            "\n  [warn] could not resolve source images -- skipping pixel "
+            "conversion (frame-area stats above are unaffected)."
+        )
     print("     This is the argument for training at higher resolution.")
 
     names = cfg.get("names", {})
@@ -287,11 +306,17 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         },
         "median_box_area_pct_of_frame": round(float(np.median(areas)) * 100, 4),
         "median_box_side_px": {
-            "at_640": round(float(np.sqrt(np.median(px_area_640))), 1) if px_area_640 else None,
-            f"at_{imgsz}": round(float(np.sqrt(np.median(px_area_imgsz))), 1) if px_area_imgsz else None,
+            "at_640": round(float(np.sqrt(np.median(px_area_640))), 1)
+            if px_area_640
+            else None,
+            f"at_{imgsz}": round(float(np.sqrt(np.median(px_area_imgsz))), 1)
+            if px_area_imgsz
+            else None,
         },
         "source_dims_seen": {f"{w}x{h}": n for (w, h), n in dims_seen.most_common()},
-        "class_balance": {str(names.get(c, c)): n for c, n in cls_counter.most_common()},
+        "class_balance": {
+            str(names.get(c, c)): n for c, n in cls_counter.most_common()
+        },
     }
 
 
@@ -299,39 +324,52 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--weights", required=True, type=Path)
     p.add_argument("--data", default="VisDrone.yaml")
-    p.add_argument("--imgsz", type=int, default=1024,
-                   help="Should match the resolution the weights were "
-                        "trained at (this project's default); evaluating a "
-                        "1024px-trained model at a different size is valid "
-                        "but not what the committed numbers reflect.")
-    p.add_argument("--split", default="val",
-                   help="Which split's labels to characterise. Accuracy is "
-                        "only reported for 'val' -- scoring the model on the "
-                        "data it was fitted to would be a misleading number to "
-                        "publish, so other splits emit label statistics only.")
+    p.add_argument(
+        "--imgsz",
+        type=int,
+        default=1024,
+        help="Should match the resolution the weights were "
+        "trained at (this project's default); evaluating a "
+        "1024px-trained model at a different size is valid "
+        "but not what the committed numbers reflect.",
+    )
+    p.add_argument(
+        "--split",
+        default="val",
+        help="Which split's labels to characterise. Accuracy is "
+        "only reported for 'val' -- scoring the model on the "
+        "data it was fitted to would be a misleading number to "
+        "publish, so other splits emit label statistics only.",
+    )
     p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
-    p.add_argument("--out", type=Path, default=None,
-                   help="Defaults to reports/evaluation.json for the val "
-                        "split and reports/evaluation_<split>.json otherwise, "
-                        "so a second split cannot silently overwrite the first.")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Defaults to reports/evaluation.json for the val "
+        "split and reports/evaluation_<split>.json otherwise, "
+        "so a second split cannot silently overwrite the first.",
+    )
     args = p.parse_args()
 
     if args.out is None:
         args.out = REPORTS_DIR / (
-            "evaluation.json" if args.split == "val"
+            "evaluation.json"
+            if args.split == "val"
             else f"evaluation_{args.split}.json"
         )
 
     report = {
         "accuracy": (
             per_class_table(args.weights, args.data, args.imgsz, args.device)
-            if args.split == "val" else None
+            if args.split == "val"
+            else None
         ),
         "label_scale": label_size_distribution(args.data, args.split, args.imgsz),
         "config": {
             "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
-                       if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
-                       else str(args.weights),
+            if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
+            else str(args.weights),
             "data": args.data,
             "imgsz": args.imgsz,
             "split": args.split,

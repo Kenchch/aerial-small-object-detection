@@ -4,11 +4,12 @@ track.py defers its cv2/ultralytics imports into the functions that use them,
 so importing this module needs neither. track_colour does still call into
 numpy, which is the one dependency guarded below.
 """
+
 import pytest
 
 pytest.importorskip("numpy", reason="track_colour draws from numpy's RNG")
 
-from track import track_colour  # noqa: E402  (must follow the skip guard)
+from track import track_colour
 
 
 def test_colour_is_deterministic_per_track_id():

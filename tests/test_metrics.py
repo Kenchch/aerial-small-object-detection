@@ -6,14 +6,15 @@ trained checkpoint - i.e. unreachable by any test. A README table nobody can
 test is a README table nobody can trust, so the arithmetic was pulled out into
 pure functions and is pinned here with synthetic inputs.
 """
+
 import numpy as np
 import pytest
 
 from evaluate import error_split, letterbox_scale
 from track import association_remainders
 
-
 # --- confusion-matrix decomposition ---------------------------------------- #
+
 
 def _cm(rows):
     """Ultralytics layout: rows=Predicted, cols=True, last row/col = background."""
@@ -24,26 +25,31 @@ def test_error_split_components_sum_to_one_per_class():
     """Each column is normalised by its own total, so a true class's outcome
     splits exactly three ways. If it does not, one of the three is wrong."""
     names = {0: "car", 1: "bus"}
-    cm = _cm([[70, 10, 0],      # predicted car
-              [20, 60, 0],      # predicted bus
-              [10, 30, 0]])     # predicted background (i.e. missed)
+    cm = _cm(
+        [
+            [70, 10, 0],  # predicted car
+            [20, 60, 0],  # predicted bus
+            [10, 30, 0],
+        ]
+    )  # predicted background (i.e. missed)
     got = error_split(cm, names)
     for cls in ("car", "bus"):
-        total = (got[cls]["correct"] + got[cls]["missed_as_background"]
-                 + got[cls]["misclassified"])
+        total = (
+            got[cls]["correct"]
+            + got[cls]["missed_as_background"]
+            + got[cls]["misclassified"]
+        )
         assert total == pytest.approx(1.0, abs=1e-3), f"{cls} splits to {total}"
 
 
 def test_error_split_values_are_column_normalised():
     names = {0: "car", 1: "bus"}
-    cm = _cm([[70, 10, 0],
-              [20, 60, 0],
-              [10, 30, 0]])
+    cm = _cm([[70, 10, 0], [20, 60, 0], [10, 30, 0]])
     got = error_split(cm, names)
-    assert got["car"]["correct"] == pytest.approx(0.70)          # 70/100
+    assert got["car"]["correct"] == pytest.approx(0.70)  # 70/100
     assert got["car"]["missed_as_background"] == pytest.approx(0.10)
-    assert got["car"]["misclassified"] == pytest.approx(0.20)    # the 20 predicted bus
-    assert got["bus"]["correct"] == pytest.approx(0.60)          # 60/100
+    assert got["car"]["misclassified"] == pytest.approx(0.20)  # the 20 predicted bus
+    assert got["bus"]["correct"] == pytest.approx(0.60)  # 60/100
     assert got["bus"]["missed_as_background"] == pytest.approx(0.30)
 
 
@@ -53,10 +59,14 @@ def test_error_split_names_the_dominant_confusion_not_background():
     here would let a missing-limited class report 'background' and hide the
     class it is actually being confused with."""
     names = {0: "car", 1: "bus", 2: "truck"}
-    cm = _cm([[10, 0, 5],       # predicted car
-              [0, 10, 25],      # predicted bus   <- truck mostly goes here
-              [0, 0, 10],       # predicted truck
-              [0, 0, 60]])      # background      <- numerically the largest cell
+    cm = _cm(
+        [
+            [10, 0, 5],  # predicted car
+            [0, 10, 25],  # predicted bus   <- truck mostly goes here
+            [0, 0, 10],  # predicted truck
+            [0, 0, 60],
+        ]
+    )  # background      <- numerically the largest cell
     got = error_split(cm, names)
     assert got["truck"]["top_confusion"] == "bus"
     assert got["truck"]["missed_as_background"] == pytest.approx(0.60)
@@ -66,9 +76,7 @@ def test_error_split_skips_classes_with_no_true_instances():
     """A class absent from the split has an all-zero column; dividing by it
     would emit nan into a JSON file written with allow_nan=False."""
     names = {0: "car", 1: "ghost"}
-    cm = _cm([[50, 0, 0],
-               [0, 0, 0],
-               [10, 0, 0]])
+    cm = _cm([[50, 0, 0], [0, 0, 0], [10, 0, 0]])
     got = error_split(cm, names)
     assert "ghost" not in got and "car" in got
     assert all(np.isfinite(v) for v in got["car"].values() if isinstance(v, float))
@@ -79,9 +87,7 @@ def test_error_split_reproduces_the_committed_report():
     still produces plausible-looking numbers that sum to 1, so only a fixed
     expectation catches it."""
     names = {0: "car", 1: "van"}
-    cm = _cm([[713, 194, 0],
-              [194, 341, 0],
-              [93, 465, 0]])
+    cm = _cm([[713, 194, 0], [194, 341, 0], [93, 465, 0]])
     got = error_split(cm, names)
     assert got["car"]["correct"] == pytest.approx(0.713, abs=1e-3)
     assert got["van"]["correct"] == pytest.approx(0.341, abs=1e-3)
@@ -90,13 +96,17 @@ def test_error_split_reproduces_the_committed_report():
 
 # --- letterbox geometry ----------------------------------------------------- #
 
-@pytest.mark.parametrize("W,H,imgsz,expected", [
-    (1920, 1080, 640, 640 / 1920),     # 16:9, the whole val split
-    (2000, 1500, 640, 640 / 2000),     # 4:3, present in train
-    (1360, 765, 1024, 1024 / 1360),
-    (640, 640, 640, 1.0),              # already square
-    (480, 960, 640, 640 / 960),        # portrait: long side is H
-])
+
+@pytest.mark.parametrize(
+    "W,H,imgsz,expected",
+    [
+        (1920, 1080, 640, 640 / 1920),  # 16:9, the whole val split
+        (2000, 1500, 640, 640 / 2000),  # 4:3, present in train
+        (1360, 765, 1024, 1024 / 1360),
+        (640, 640, 640, 1.0),  # already square
+        (480, 960, 640, 640 / 960),  # portrait: long side is H
+    ],
+)
 def test_letterbox_scale_uses_the_long_side(W, H, imgsz, expected):
     assert letterbox_scale(W, H, imgsz) == pytest.approx(expected)
 
@@ -108,8 +118,8 @@ def test_letterbox_never_upscales_the_short_side_independently():
     box-size estimate overstate small objects."""
     W, H, imgsz = 1920, 1080, 640
     s = letterbox_scale(W, H, imgsz)
-    assert W * s == pytest.approx(640)      # long side reaches the target
-    assert H * s == pytest.approx(360)      # short side is padded, not stretched
+    assert W * s == pytest.approx(640)  # long side reaches the target
+    assert H * s == pytest.approx(360)  # short side is padded, not stretched
     assert H * s < imgsz
 
 
@@ -125,6 +135,7 @@ def test_letterbox_area_matches_the_committed_median_box():
 
 
 # --- association remainder --------------------------------------------------- #
+
 
 def test_association_remainder_is_per_frame_not_a_difference_of_medians():
     """The case that motivated the change. Each frame has exactly one cheap

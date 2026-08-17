@@ -45,8 +45,10 @@ def association_remainders(t_infer, t_pre, t_fwd, t_post):
     frames, producing a number no frame ever exhibited - and one that can come
     out negative even when every frame's own remainder is positive.
     """
-    return [ti - (p + f + po)
-            for ti, p, f, po in zip(t_infer, t_pre, t_fwd, t_post, strict=True)]
+    return [
+        ti - (p + f + po)
+        for ti, p, f, po in zip(t_infer, t_pre, t_fwd, t_post, strict=True)
+    ]
 
 
 def track_colour(track_id: int) -> tuple:
@@ -64,7 +66,11 @@ def frame_source(source: Path):
 
     if source.is_dir():
         files = sorted(
-            [p for p in source.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
+            [
+                p
+                for p in source.iterdir()
+                if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+            ]
         )
         if not files:
             raise SystemExit(f"no images in {source}")
@@ -94,8 +100,10 @@ def frame_source(source: Path):
                 continue
             yield img, None, None
         if skipped:
-            print(f"[warn] skipped {len(skipped)} undecodable image(s): "
-                  f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}")
+            print(
+                f"[warn] skipped {len(skipped)} undecodable image(s): "
+                f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}"
+            )
     else:
         cap = cv2.VideoCapture(str(source))
         if not cap.isOpened():
@@ -113,25 +121,41 @@ def frame_source(source: Path):
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Track objects through a video with YOLO + ByteTrack")
+    p = argparse.ArgumentParser(
+        description="Track objects through a video with YOLO + ByteTrack"
+    )
     p.add_argument("--weights", required=True, type=Path)
-    p.add_argument("--source", required=True, type=Path,
-                   help="Video file or directory of ordered frames.")
+    p.add_argument(
+        "--source",
+        required=True,
+        type=Path,
+        help="Video file or directory of ordered frames.",
+    )
     p.add_argument("--imgsz", type=int, default=1024)
     p.add_argument("--conf", type=float, default=0.25)
-    p.add_argument("--tracker", default="bytetrack.yaml",
-                   help="ByteTrack keeps low-confidence detections as association "
-                        "candidates instead of discarding them, which is the right "
-                        "trade for aerial imagery where small objects sit near the "
-                        "confidence floor for most of their track.")
-    p.add_argument("--out", type=Path, default=PROJECT_ROOT / "reports" / "track_out.mp4")
-    p.add_argument("--no-write", action="store_true", help="Profile only; write no video.")
-    p.add_argument("--device", default="0",
-                   help="'0' for GPU, or 'cpu'. Matches evaluate.py and "
-                        "benchmark.py. CPU works but is not the intended "
-                        "path here: the staged profile below is only "
-                        "meaningful against the hardware you plan to deploy "
-                        "on, and the committed numbers are from a GPU run.")
+    p.add_argument(
+        "--tracker",
+        default="bytetrack.yaml",
+        help="ByteTrack keeps low-confidence detections as association "
+        "candidates instead of discarding them, which is the right "
+        "trade for aerial imagery where small objects sit near the "
+        "confidence floor for most of their track.",
+    )
+    p.add_argument(
+        "--out", type=Path, default=PROJECT_ROOT / "reports" / "track_out.mp4"
+    )
+    p.add_argument(
+        "--no-write", action="store_true", help="Profile only; write no video."
+    )
+    p.add_argument(
+        "--device",
+        default="0",
+        help="'0' for GPU, or 'cpu'. Matches evaluate.py and "
+        "benchmark.py. CPU works but is not the intended "
+        "path here: the staged profile below is only "
+        "meaningful against the hardware you plan to deploy "
+        "on, and the committed numbers are from a GPU run.",
+    )
     args = p.parse_args()
 
     import cv2
@@ -146,14 +170,18 @@ def main() -> None:
     writer = None
     if not args.no_write:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+        writer = cv2.VideoWriter(
+            str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)
+        )
         # Without this check, a missing mp4v/FFmpeg codec makes write() a
         # silent no-op: the script still exits 0 and prints a frame count,
         # and the failure only surfaces later, in whatever reads the (empty
         # or missing) output file -- pointing at the wrong script entirely.
         if not writer.isOpened():
-            raise SystemExit(f"cannot open VideoWriter for {args.out} "
-                              f"(mp4v codec unavailable in this OpenCV build?)")
+            raise SystemExit(
+                f"cannot open VideoWriter for {args.out} "
+                f"(mp4v codec unavailable in this OpenCV build?)"
+            )
 
     t_infer, t_draw, t_write, t_decode = [], [], [], []
     # Ultralytics fills Results.speed with its own internal split of the call.
@@ -161,7 +189,7 @@ def main() -> None:
     # forward pass that benchmark.py reports, with nothing in either report
     # saying where the difference goes.
     t_pre, t_fwd, t_post = [], [], []
-    track_frames = defaultdict(int)      # track id -> frames seen
+    track_frames = defaultdict(int)  # track id -> frames seen
     n_frames = 0
     wall_start = time.perf_counter()
 
@@ -175,8 +203,15 @@ def main() -> None:
         t0 = time.perf_counter()
         # persist=True carries tracker state across calls; without it every frame
         # is treated as a new sequence and ids restart from 1.
-        res = model.track(frame, imgsz=args.imgsz, conf=args.conf, device=args.device,
-                          tracker=args.tracker, persist=True, verbose=False)[0]
+        res = model.track(
+            frame,
+            imgsz=args.imgsz,
+            conf=args.conf,
+            device=args.device,
+            tracker=args.tracker,
+            persist=True,
+            verbose=False,
+        )[0]
         t_infer.append((time.perf_counter() - t0) * 1000)
 
         # preprocess = letterbox + BGR->RGB + /255 + HWC->CHW + host-to-device;
@@ -203,10 +238,23 @@ def main() -> None:
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
                 label = f"{model.names[cid]} {tid}"
                 (tw, th), _ = cv2.getTextSize(label, font, 0.4, 1)
-                cv2.rectangle(frame, (int(x1), int(y1) - th - 4),
-                              (int(x1) + tw + 4, int(y1)), colour, -1)
-                cv2.putText(frame, label, (int(x1) + 2, int(y1) - 3), font, 0.4,
-                            (0, 0, 0), 1, cv2.LINE_AA)
+                cv2.rectangle(
+                    frame,
+                    (int(x1), int(y1) - th - 4),
+                    (int(x1) + tw + 4, int(y1)),
+                    colour,
+                    -1,
+                )
+                cv2.putText(
+                    frame,
+                    label,
+                    (int(x1) + 2, int(y1) - 3),
+                    font,
+                    0.4,
+                    (0, 0, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
         t_draw.append((time.perf_counter() - t0) * 1000)
 
         if writer is not None:
@@ -301,7 +349,9 @@ def main() -> None:
         "warmup": {
             "first_frame_ms": round(t_infer[0], 1) if t_infer else None,
             "steady_state_ms": round(med(t_infer), 2),
-            "warmup_penalty_x": round(t_infer[0] / med(t_infer), 1) if t_infer and med(t_infer) else None,
+            "warmup_penalty_x": round(t_infer[0] / med(t_infer), 1)
+            if t_infer and med(t_infer)
+            else None,
         },
         "reconciliation": {
             "accounted_mean_ms": round(accounted_mean, 2),
@@ -314,12 +364,19 @@ def main() -> None:
             # Tentative (never-confirmed) ids per confirmed one -- NOT
             # max_id / confirmed, which counts the confirmed ids themselves
             # in the numerator too and would overstate this by exactly 1x.
-            "id_churn_ratio_min": round((max_id - len(track_frames)) / len(track_frames), 1)
-                                  if track_frames else 0,  # lower bound, see above
-            "mean_track_len_frames": round(sum(lengths) / len(lengths), 1) if lengths else 0,
+            "id_churn_ratio_min": round(
+                (max_id - len(track_frames)) / len(track_frames), 1
+            )
+            if track_frames
+            else 0,  # lower bound, see above
+            "mean_track_len_frames": round(sum(lengths) / len(lengths), 1)
+            if lengths
+            else 0,
             "max_track_len_frames": max(lengths) if lengths else 0,
             "single_frame_tracks": fragments,
-            "single_frame_pct": round(100 * fragments / len(lengths), 1) if lengths else 0,
+            "single_frame_pct": round(100 * fragments / len(lengths), 1)
+            if lengths
+            else 0,
             "mean_boxes_per_frame": round(sum(lengths) / n_frames, 1),
         },
         "config": {
@@ -328,15 +385,19 @@ def main() -> None:
             # absolute path nor the path separator of whoever generated it
             # should end up baked into the file.
             "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
-                       if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
-                       else str(args.weights),
-            "imgsz": args.imgsz, "conf": args.conf, "tracker": args.tracker,
+            if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
+            else str(args.weights),
+            "imgsz": args.imgsz,
+            "conf": args.conf,
+            "tracker": args.tracker,
         },
     }
 
     print(f"\n{'=' * 60}")
-    print(f"  Tracked {n_frames} frames in {wall:.1f} s "
-          f"— {report['end_to_end_fps']} FPS end-to-end")
+    print(
+        f"  Tracked {n_frames} frames in {wall:.1f} s "
+        f"— {report['end_to_end_fps']} FPS end-to-end"
+    )
     print(f"{'=' * 60}")
     md, mn = report["stage_ms_median"], report["stage_ms_mean"]
     print(f"  {'stage':<18}{'median':>10}{'mean':>10}")
@@ -355,17 +416,23 @@ def main() -> None:
     print(f"  coverage {r['coverage_pct']} %  (unaccounted {r['unaccounted_ms']} ms)")
 
     w = report["warmup"]
-    print(f"\n  first frame  : {w['first_frame_ms']} ms  "
-          f"({w['warmup_penalty_x']}× steady state)")
+    print(
+        f"\n  first frame  : {w['first_frame_ms']} ms  "
+        f"({w['warmup_penalty_x']}× steady state)"
+    )
 
     t = report["tracks"]
     print(f"\n  unique tracks      : {t['unique_ids']}")
-    print(f"  highest id seen    : {t['highest_id_seen']}  "
-          f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)")
+    print(
+        f"  highest id seen    : {t['highest_id_seen']}  "
+        f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)"
+    )
     print(f"  boxes per frame    : {t['mean_boxes_per_frame']}")
     print(f"  mean track length  : {t['mean_track_len_frames']} frames")
     print(f"  longest track      : {t['max_track_len_frames']} frames")
-    print(f"  single-frame tracks: {t['single_frame_tracks']} ({t['single_frame_pct']} %)")
+    print(
+        f"  single-frame tracks: {t['single_frame_tracks']} ({t['single_frame_pct']} %)"
+    )
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_json = REPORTS_DIR / "tracking.json"

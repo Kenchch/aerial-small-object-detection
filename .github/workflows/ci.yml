@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # requirements.txt pins torch, ultralytics and onnxruntime-gpu, none of
+      # which this suite needs or a CI runner can use. The whole point of the
+      # tests is that they run without them: test_cli.py makes torch,
+      # ultralytics and cv2 UNIMPORTABLE and asserts every --help still exits 0,
+      # and the metric tests drive pure functions on synthetic input. Installing
+      # a CUDA stack here would take minutes and weaken the guarantee.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest ruff pip-audit
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format
+        run: ruff format --check .
+
+      - name: Test
+        # No GPU, no dataset, no checkpoint - exactly the environment the
+        # bare-clone guarantee is about.
+        run: pytest -q
+
+      - name: Audit dependencies
+        # The pinned set is what a reader would install, so it is what gets
+        # audited, even though CI does not install it itself.
+        #
+        # torch is pinned at 2.6.0 with known advisories, and they are ignored
+        # here deliberately rather than by dropping --strict. The pin is not a
+        # preference: this project's GPU driver (532.09) constrains it to the
+        # cu124 build line, and every published metric and latency figure was
+        # measured on it. Moving to 2.7+ would invalidate the numbers this repo
+        # exists to show. The advisories are remote-code-execution paths through
+        # loading untrusted checkpoints and malformed model files; this repo
+        # loads one checkpoint it produced itself.
+        #
+        # Listing the IDs rather than disabling the step means a NEW advisory,
+        # in torch or anything else, still fails the build. An audit that is
+        # allowed to fail is one nobody reads.
+        run: |
+          pip-audit -r requirements.txt --strict \
+            --ignore-vuln PYSEC-2025-191 --ignore-vuln PYSEC-2025-194 \
+            --ignore-vuln PYSEC-2025-198 --ignore-vuln PYSEC-2025-199 \
+            --ignore-vuln PYSEC-2025-200 --ignore-vuln PYSEC-2025-201 \
+            --ignore-vuln PYSEC-2025-202 --ignore-vuln PYSEC-2025-203 \
+            --ignore-vuln PYSEC-2025-204 --ignore-vuln PYSEC-2025-205 \
+            --ignore-vuln PYSEC-2025-206 --ignore-vuln PYSEC-2025-207 \
+            --ignore-vuln PYSEC-2025-208 --ignore-vuln PYSEC-2025-209 \
+            --ignore-vuln PYSEC-2026-139  --ignore-vuln PYSEC-2026-1970 \
+            --ignore-vuln PYSEC-2026-2286 --ignore-vuln CVE-2025-2148 \
+            --ignore-vuln CVE-2025-2149  --ignore-vuln CVE-2025-2998 \
+            --ignore-vuln CVE-2025-2999  --ignore-vuln CVE-2025-3001

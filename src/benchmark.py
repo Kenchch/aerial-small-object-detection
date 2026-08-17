@@ -208,18 +208,24 @@ def _export_is_current(onnx_path: Path, weights: Path) -> bool:
     it, so a changed checkpoint forces a re-export instead.
     """
     stamp = onnx_path.with_suffix(".onnx.sha256")
-    return (onnx_path.exists() and stamp.exists()
-            and stamp.read_text(encoding="utf-8").strip() == _sha256(weights))
+    return (
+        onnx_path.exists()
+        and stamp.exists()
+        and stamp.read_text(encoding="utf-8").strip() == _sha256(weights)
+    )
 
 
-def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
-            map_tolerance: float = 0.01) -> dict:
+def run_one(
+    weights: Path, imgsz: int, data: str, device: str = "0", map_tolerance: float = 0.01
+) -> dict:
     """Accuracy + latency across every available backend."""
     import torch
     from ultralytics import YOLO
 
     # --- accuracy -------------------------------------------------------
-    metrics = YOLO(str(weights)).val(data=data, imgsz=imgsz, device=device, verbose=False)
+    metrics = YOLO(str(weights)).val(
+        data=data, imgsz=imgsz, device=device, verbose=False
+    )
     row = {
         "imgsz": imgsz,
         "mAP50": round(metrics.box.map50, 4),
@@ -245,7 +251,9 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
     onnx_path = weights.parent / f"{weights.stem}_{imgsz}.onnx"
     if not _export_is_current(onnx_path, weights):
         exported = YOLO(str(weights)).export(
-            format="onnx", imgsz=imgsz, opset=13,
+            format="onnx",
+            imgsz=imgsz,
+            opset=13,
             simplify=True,  # onnxslim folds constants; smaller graph, faster load
             dynamic=False,  # static shapes let ORT pick better kernels
         )
@@ -254,8 +262,10 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
         # there. Now that a digest mismatch forces a re-export, the stale graph
         # is exactly what has to be overwritten.
         Path(exported).replace(onnx_path)
-        onnx_path.with_suffix(".onnx.sha256").write_text(_sha256(weights), encoding="utf-8")
-    row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024 ** 2, 2)
+        onnx_path.with_suffix(".onnx.sha256").write_text(
+            _sha256(weights), encoding="utf-8"
+        )
+    row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024**2, 2)
     row["weights_sha256"] = _sha256(weights)[:16]
 
     # Validate the ONNX graph itself. Reporting the PyTorch mAP beside ONNX
@@ -266,18 +276,27 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
         data=data, imgsz=imgsz, device=device, verbose=False
     )
     row["accuracy"] = {
-        "pytorch": {"mAP50": round(float(metrics.box.map50), 4),
-                    "mAP50_95": round(float(metrics.box.map), 4)},
-        "onnx": {"mAP50": round(float(onnx_metrics.box.map50), 4),
-                 "mAP50_95": round(float(onnx_metrics.box.map), 4)},
+        "pytorch": {
+            "mAP50": round(float(metrics.box.map50), 4),
+            "mAP50_95": round(float(metrics.box.map), 4),
+        },
+        "onnx": {
+            "mAP50": round(float(onnx_metrics.box.map50), 4),
+            "mAP50_95": round(float(onnx_metrics.box.map), 4),
+        },
     }
     d50 = row["accuracy"]["onnx"]["mAP50"] - row["accuracy"]["pytorch"]["mAP50"]
     d95 = row["accuracy"]["onnx"]["mAP50_95"] - row["accuracy"]["pytorch"]["mAP50_95"]
-    row["accuracy"]["delta"] = {"mAP50": round(d50, 4), "mAP50_95": round(d95, 4),
-                                "tolerance": map_tolerance}
-    print(f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
-          f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}  "
-          f"(delta {d50:+.4f} / {d95:+.4f})")
+    row["accuracy"]["delta"] = {
+        "mAP50": round(d50, 4),
+        "mAP50_95": round(d95, 4),
+        "tolerance": map_tolerance,
+    }
+    print(
+        f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
+        f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}  "
+        f"(delta {d50:+.4f} / {d95:+.4f})"
+    )
     if max(abs(d50), abs(d95)) > map_tolerance:
         raise SystemExit(
             f"ONNX accuracy differs from PyTorch by more than {map_tolerance}: "
@@ -287,6 +306,7 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
         )
 
     import onnxruntime as ort
+
     available = ort.get_available_providers()
     if "CUDAExecutionProvider" in available:
         row["onnx_cuda"] = bench_onnx(onnx_path, imgsz, "CUDAExecutionProvider")
@@ -303,16 +323,23 @@ def main() -> None:
     p.add_argument("--weights", required=True, type=Path)
     p.add_argument("--data", default="VisDrone.yaml")
     p.add_argument("--imgsz", type=int, default=1024)
-    p.add_argument("--device", default="0",
-                   help="Device for the accuracy .val() pass, e.g. '0' or "
-                        "'cpu'. The PyTorch-CUDA and ONNX-CUDA latency rows "
-                        "always need an actual CUDA device regardless of "
-                        "this setting -- that comparison is CUDA vs CPU by "
-                        "definition -- and are skipped, not forced, when "
-                        "one isn't available.")
-    p.add_argument("--map-tolerance", type=float, default=0.01,
-                   help="Fail if ONNX mAP differs from PyTorch by more than "
-                        "this. An export is meant to change speed, not the model.")
+    p.add_argument(
+        "--device",
+        default="0",
+        help="Device for the accuracy .val() pass, e.g. '0' or "
+        "'cpu'. The PyTorch-CUDA and ONNX-CUDA latency rows "
+        "always need an actual CUDA device regardless of "
+        "this setting -- that comparison is CUDA vs CPU by "
+        "definition -- and are skipped, not forced, when "
+        "one isn't available.",
+    )
+    p.add_argument(
+        "--map-tolerance",
+        type=float,
+        default=0.01,
+        help="Fail if ONNX mAP differs from PyTorch by more than "
+        "this. An export is meant to change speed, not the model.",
+    )
     p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
     args = p.parse_args()
 
@@ -328,9 +355,11 @@ def main() -> None:
     print(f"\n{'=' * 60}")
     print(f"imgsz {row['imgsz']}   mAP50 {row['mAP50']}   mAP50-95 {row['mAP50_95']}")
     print(f"{'':16}{'core':>12}{'+transfer':>12}")
-    for label, key in (("PyTorch CUDA", "pytorch_cuda"),
-                       ("ONNX  CUDA", "onnx_cuda"),
-                       ("ONNX  CPU", "onnx_cpu")):
+    for label, key in (
+        ("PyTorch CUDA", "pytorch_cuda"),
+        ("ONNX  CUDA", "onnx_cuda"),
+        ("ONNX  CPU", "onnx_cpu"),
+    ):
         print(f"{label:16}{med(key, 'core'):>12}{med(key, 'transfer_inclusive'):>12}")
     print("core = in/out resident on device; +transfer = CPU in, CPU out")
     print(f"\nsaved -> {args.out}")
