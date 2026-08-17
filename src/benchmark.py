@@ -38,6 +38,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
+ONNX_OPSET = 13
 WARMUP_ITERS = 20
 TIMED_ITERS = 100
 
@@ -163,6 +164,59 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     return {"core": core, "transfer_inclusive": transfer_inclusive}
 
 
+def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
+    """Count how many graph nodes actually ran on CUDA.
+
+    `sess.get_providers()` only says which providers the session registered. It
+    catches a CUDA EP that failed to load entirely - that path returns
+    ['CPUExecutionProvider'] and bench_onnx already refuses it - but it cannot
+    see *partial* fallback, where CUDA loads and individual unsupported ops run
+    on CPU anyway. Claiming "genuine CUDA execution" from the provider list was
+    therefore claiming more than the evidence supported.
+
+    ORT's profiler records the provider per node, which is the direct
+    measurement. Run once, outside the timed loops, and recorded in
+    benchmark.json so the claim in the README has something behind it.
+    """
+    import collections
+    import json as _json
+
+    import numpy as np
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    opts.enable_profiling = True
+    sess = ort.InferenceSession(
+        str(onnx_path), opts, providers=["CUDAExecutionProvider"]
+    )
+    sess.run(
+        None,
+        {
+            sess.get_inputs()[0].name: np.random.randn(1, 3, imgsz, imgsz).astype(
+                np.float32
+            )
+        },
+    )
+    trace = Path(sess.end_profiling())
+    try:
+        events = _json.loads(trace.read_text(encoding="utf-8"))
+    finally:
+        trace.unlink(missing_ok=True)
+
+    counts = collections.Counter(
+        e["args"]["provider"]
+        for e in events
+        if e.get("cat") == "Node" and "provider" in e.get("args", {})
+    )
+    total = sum(counts.values())
+    return {
+        "nodes_total": total,
+        "by_provider": dict(counts),
+        "cpu_fallback_nodes": counts.get("CPUExecutionProvider", 0),
+        "all_on_cuda": total > 0 and counts.get("CPUExecutionProvider", 0) == 0,
+    }
+
+
 def _environment(imgsz: int) -> dict:
     """What a latency figure needs alongside it to mean anything.
 
@@ -198,21 +252,48 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _export_is_current(onnx_path: Path, weights: Path) -> bool:
-    """Does this .onnx correspond to these weights?
+def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
+    """Everything that determines whether a cached .onnx is the right one.
 
-    The export was skipped whenever a file of the right name existed, so
-    retraining and re-running benchmarked the OLD graph against the NEW
-    checkpoint's accuracy - two different models in one row, and nothing on
-    screen to say so. The digest of the weights it came from is written beside
-    it, so a changed checkpoint forces a re-export instead.
+    A weights digest alone was not enough. It catches a changed checkpoint, but
+    not a re-run at a different --imgsz, a different opset, simplify toggled, or
+    an ultralytics/onnx/onnxslim upgrade that emits a different graph from the
+    same inputs. Any of those produce a stale cache hit that benchmarks one
+    model and reports another's accuracy.
     """
-    stamp = onnx_path.with_suffix(".onnx.sha256")
-    return (
-        onnx_path.exists()
-        and stamp.exists()
-        and stamp.read_text(encoding="utf-8").strip() == _sha256(weights)
-    )
+    import onnx
+    import onnxslim
+    import ultralytics
+
+    return {
+        "weights_sha256": _sha256(weights),
+        "onnx_sha256": _sha256(onnx_path) if onnx_path.exists() else None,
+        "imgsz": imgsz,
+        "opset": ONNX_OPSET,
+        "simplify": True,
+        "ultralytics": ultralytics.__version__,
+        "onnx": onnx.__version__,
+        "onnxslim": onnxslim.__version__,
+    }
+
+
+def _export_is_current(onnx_path: Path, weights: Path, imgsz: int) -> bool:
+    """Does this .onnx correspond to these weights, at this size, from this
+    toolchain?
+
+    The export used to be skipped whenever a file of the right name existed, so
+    retraining and re-running benchmarked the OLD graph against the NEW
+    checkpoint's accuracy - two different models in one row, with nothing on
+    screen to say so.
+    """
+    stamp = onnx_path.with_suffix(".onnx.manifest.json")
+    if not (onnx_path.exists() and stamp.exists()):
+        return False
+    try:
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return recorded == _export_manifest(onnx_path, weights, imgsz)
 
 
 def run_one(
@@ -249,7 +330,7 @@ def run_one(
     # skips export, and silently benchmarks best.pt's latency against
     # last.pt's freshly computed accuracy in the same output row.
     onnx_path = weights.parent / f"{weights.stem}_{imgsz}.onnx"
-    if not _export_is_current(onnx_path, weights):
+    if not _export_is_current(onnx_path, weights, imgsz):
         exported = YOLO(str(weights)).export(
             format="onnx",
             imgsz=imgsz,
@@ -266,7 +347,7 @@ def run_one(
             _sha256(weights), encoding="utf-8"
         )
     row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024**2, 2)
-    row["weights_sha256"] = _sha256(weights)[:16]
+    row["export"] = _export_manifest(onnx_path, weights, imgsz)
 
     # Validate the ONNX graph itself. Reporting the PyTorch mAP beside ONNX
     # latency invites the reader to assume the export preserved accuracy, which
@@ -310,6 +391,8 @@ def run_one(
     available = ort.get_available_providers()
     if "CUDAExecutionProvider" in available:
         row["onnx_cuda"] = bench_onnx(onnx_path, imgsz, "CUDAExecutionProvider")
+        row["onnx_cuda_placement"] = verify_cuda_placement(onnx_path, imgsz)
+        print(f"  ONNX node placement: {row['onnx_cuda_placement']}")
         print(f"  ONNXRuntime GPU: {row['onnx_cuda']}")
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
     print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")

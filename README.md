@@ -184,9 +184,9 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 11.42 ms · 87.6 FPS | 14.04 ms · 71.2 FPS |
-| ONNX Runtime (CUDA) | **9.28 ms · 107.7 FPS** | **11.37 ms · 88.0 FPS** |
-| ONNX Runtime (CPU) | 99.3 ms · 10.1 FPS | 99.3 ms · 10.1 FPS |
+| PyTorch (CUDA, eager) | 11.08 ms · 90.3 FPS | 13.67 ms · 73.2 FPS |
+| ONNX Runtime (CUDA) | **9.21 ms · 108.6 FPS** | **11.19 ms · 89.4 FPS** |
+| ONNX Runtime (CPU) | 93.2 ms · 10.7 FPS | 93.2 ms · 10.7 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
@@ -194,11 +194,11 @@ raw PyTorch model across backends.
 ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
 by construction; timing that against a GPU-resident PyTorch forward — which is
 what this table used to do — charges ONNX ~2.3 ms of copying PyTorch never
-paid, and reported the export as **8 % faster when like-for-like it is 19 %**.
+paid, and reported the export as **8 % faster when like-for-like it is 17 %**.
 On CPU there is no copy to separate, so the two columns coincide.
 
-ONNX is 19 % faster in both regimes. The more
-decisive number is still CPU: **10.7× slower** than ONNX on GPU — the case for
+ONNX is 17 % faster core-to-core and 18 % transfer-to-transfer. The more
+decisive number is still CPU: **10.1× slower** than ONNX on GPU — the case for
 keeping inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
@@ -218,9 +218,12 @@ Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-9
 sha256 of the checkpoint it came from, so retraining forces a re-export
 rather than benchmarking yesterday's graph against today's weights.
 
-The GPU path used above is a genuine CUDA execution — worth stating because
-ONNX Runtime can silently substitute CPU for a missing CUDA library and still
-report success (see the engineering notes below).
+The GPU path is genuine CUDA execution, and that is measured rather than
+inferred. `sess.get_providers()` only reports which providers the session
+registered — it catches a CUDA library that failed to load entirely, but not
+*partial* fallback, where CUDA loads and unsupported ops quietly run on CPU
+anyway. ORT's profiler gives per-node placement: **238 of 238 nodes on CUDA, 0 on CPU**, recorded as
+`onnx_cuda_placement` in `reports/benchmark.json`.
 
 ---
 
@@ -265,8 +268,8 @@ with the median total is not the frame with the median preprocess time.
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (33.87 ms) is not the same measurement as the 11.42 ms
-PyTorch core row in the backend table above, and the 22.45 ms between them is the
+**`detect + track` (33.87 ms) is not the same measurement as the 11.08 ms
+PyTorch core row in the backend table above, and the 22.79 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -283,7 +286,7 @@ buys 2.58 ms on the forward pass, while 20.58 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.42 → 13.29 ms difference on the forward pass itself is
+The remaining 11.08 → 13.29 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
