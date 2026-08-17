@@ -49,4 +49,4 @@ reports/*.mp4
 reports/_frame_check.png
 
 # Export provenance stamp, regenerated beside the .onnx it describes.
-*.onnx.sha256
+*.onnx.manifest.json

@@ -4,20 +4,29 @@
   "mAP50_95": 0.2216,
   "pytorch_cuda": {
     "core": {
-      "median_ms": 11.42,
-      "p95_ms": 12.48,
-      "min_ms": 10.91,
-      "fps": 87.6
+      "median_ms": 11.08,
+      "p95_ms": 21.07,
+      "min_ms": 10.63,
+      "fps": 90.3
     },
     "transfer_inclusive": {
-      "median_ms": 14.04,
-      "p95_ms": 15.37,
-      "min_ms": 13.45,
-      "fps": 71.2
+      "median_ms": 13.67,
+      "p95_ms": 14.27,
+      "min_ms": 13.2,
+      "fps": 73.2
     }
   },
   "onnx_size_mb": 10.37,
-  "weights_sha256": "8786213fc488fc8b",
+  "export": {
+    "weights_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
+    "onnx_sha256": "147e4d118a88632051d1a33c6b2c151775c1002875de334f394139163ff38f3b",
+    "imgsz": 1024,
+    "opset": 13,
+    "simplify": true,
+    "ultralytics": "8.4.110",
+    "onnx": "1.22.0",
+    "onnxslim": "0.1.94"
+  },
   "accuracy": {
     "pytorch": {
       "mAP50": 0.3748,
@@ -35,30 +44,38 @@
   },
   "onnx_cuda": {
     "core": {
-      "median_ms": 9.28,
-      "p95_ms": 10.44,
-      "min_ms": 9.07,
-      "fps": 107.7
+      "median_ms": 9.21,
+      "p95_ms": 9.43,
+      "min_ms": 9.0,
+      "fps": 108.6
     },
     "transfer_inclusive": {
-      "median_ms": 11.37,
-      "p95_ms": 12.29,
-      "min_ms": 11.02,
-      "fps": 88.0
+      "median_ms": 11.19,
+      "p95_ms": 11.9,
+      "min_ms": 10.86,
+      "fps": 89.4
     }
+  },
+  "onnx_cuda_placement": {
+    "nodes_total": 238,
+    "by_provider": {
+      "CUDAExecutionProvider": 238
+    },
+    "cpu_fallback_nodes": 0,
+    "all_on_cuda": true
   },
   "onnx_cpu": {
     "core": {
-      "median_ms": 99.3,
-      "p95_ms": 114.38,
-      "min_ms": 87.65,
-      "fps": 10.1
+      "median_ms": 93.2,
+      "p95_ms": 104.02,
+      "min_ms": 83.03,
+      "fps": 10.7
     },
     "transfer_inclusive": {
-      "median_ms": 99.3,
-      "p95_ms": 114.38,
-      "min_ms": 87.65,
-      "fps": 10.1
+      "median_ms": 93.2,
+      "p95_ms": 104.02,
+      "min_ms": 83.03,
+      "fps": 10.7
     }
   },
   "environment": {
