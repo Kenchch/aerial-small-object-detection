@@ -4,45 +4,61 @@
   "mAP50_95": 0.2216,
   "pytorch_cuda": {
     "core": {
-      "median_ms": 12.15,
-      "p95_ms": 13.45,
-      "min_ms": 11.24,
-      "fps": 82.3
+      "median_ms": 11.42,
+      "p95_ms": 12.48,
+      "min_ms": 10.91,
+      "fps": 87.6
     },
     "transfer_inclusive": {
-      "median_ms": 14.76,
-      "p95_ms": 16.28,
-      "min_ms": 13.94,
-      "fps": 67.8
+      "median_ms": 14.04,
+      "p95_ms": 15.37,
+      "min_ms": 13.45,
+      "fps": 71.2
     }
   },
   "onnx_size_mb": 10.37,
+  "weights_sha256": "8786213fc488fc8b",
+  "accuracy": {
+    "pytorch": {
+      "mAP50": 0.3748,
+      "mAP50_95": 0.2216
+    },
+    "onnx": {
+      "mAP50": 0.3752,
+      "mAP50_95": 0.2223
+    },
+    "delta": {
+      "mAP50": 0.0004,
+      "mAP50_95": 0.0007,
+      "tolerance": 0.01
+    }
+  },
   "onnx_cuda": {
     "core": {
-      "median_ms": 9.57,
-      "p95_ms": 10.76,
-      "min_ms": 8.96,
-      "fps": 104.5
+      "median_ms": 9.28,
+      "p95_ms": 10.44,
+      "min_ms": 9.07,
+      "fps": 107.7
     },
     "transfer_inclusive": {
-      "median_ms": 11.85,
-      "p95_ms": 13.46,
-      "min_ms": 10.93,
-      "fps": 84.4
+      "median_ms": 11.37,
+      "p95_ms": 12.29,
+      "min_ms": 11.02,
+      "fps": 88.0
     }
   },
   "onnx_cpu": {
     "core": {
-      "median_ms": 103.92,
-      "p95_ms": 119.05,
-      "min_ms": 92.72,
-      "fps": 9.6
+      "median_ms": 99.3,
+      "p95_ms": 114.38,
+      "min_ms": 87.65,
+      "fps": 10.1
     },
     "transfer_inclusive": {
-      "median_ms": 103.92,
-      "p95_ms": 119.05,
-      "min_ms": 92.72,
-      "fps": 9.6
+      "median_ms": 99.3,
+      "p95_ms": 114.38,
+      "min_ms": 87.65,
+      "fps": 10.1
     }
   },
   "environment": {

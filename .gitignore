@@ -47,3 +47,6 @@ Thumbs.db
 # regenerable from make_demo_clip.py + track.py and are too large for git.
 reports/*.mp4
 reports/_frame_check.png
+
+# Export provenance stamp, regenerated beside the .onnx it describes.
+*.onnx.sha256

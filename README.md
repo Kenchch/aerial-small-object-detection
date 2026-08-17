@@ -184,9 +184,9 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.15 ms · 82.3 FPS | 14.76 ms · 67.8 FPS |
-| ONNX Runtime (CUDA) | **9.57 ms · 104.5 FPS** | **11.85 ms · 84.4 FPS** |
-| ONNX Runtime (CPU) | 103.92 ms · 9.6 FPS | 103.92 ms · 9.6 FPS |
+| PyTorch (CUDA, eager) | 11.42 ms · 87.6 FPS | 14.04 ms · 71.2 FPS |
+| ONNX Runtime (CUDA) | **9.28 ms · 107.7 FPS** | **11.37 ms · 88.0 FPS** |
+| ONNX Runtime (CPU) | 99.3 ms · 10.1 FPS | 99.3 ms · 10.1 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
@@ -194,11 +194,11 @@ raw PyTorch model across backends.
 ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
 by construction; timing that against a GPU-resident PyTorch forward — which is
 what this table used to do — charges ONNX ~2.3 ms of copying PyTorch never
-paid, and reported the export as **8 % faster when like-for-like it is 21 %**.
+paid, and reported the export as **8 % faster when like-for-like it is 19 %**.
 On CPU there is no copy to separate, so the two columns coincide.
 
-ONNX is 21 % faster core-to-core and 20 % transfer-to-transfer. The more
-decisive number is still CPU: **10.9× slower** than ONNX on GPU — the case for
+ONNX is 19 % faster in both regimes. The more
+decisive number is still CPU: **10.7× slower** than ONNX on GPU — the case for
 keeping inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
@@ -210,6 +210,13 @@ kernel *launch*, not the kernel. The full environment is recorded in
 RTX 2070 Max-Q · CUDA 12.4 · cuDNN 9.1.0 · torch 2.6.0+cu124
 onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
 ```
+
+**The export is validated, not assumed.** Latency beside a PyTorch mAP
+invites the reader to take it that ONNX kept the accuracy, which is an
+assumption: opset choice, constant folding and precision can all move it.
+Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds 0.01. The `.onnx` also carries the
+sha256 of the checkpoint it came from, so retraining forces a re-export
+rather than benchmarking yesterday's graph against today's weights.
 
 The GPU path used above is a genuine CUDA execution — worth stating because
 ONNX Runtime can silently substitute CPU for a missing CUDA library and still
@@ -258,8 +265,8 @@ with the median total is not the frame with the median preprocess time.
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (33.87 ms) is not the same measurement as the 12.15 ms
-PyTorch core row in the backend table above, and the 21.72 ms between them is the
+**`detect + track` (33.87 ms) is not the same measurement as the 11.42 ms
+PyTorch core row in the backend table above, and the 22.45 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -276,7 +283,7 @@ buys 2.58 ms on the forward pass, while 20.58 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 12.15 → 13.29 ms difference on the forward pass itself is
+The remaining 11.42 → 13.29 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 

@@ -188,7 +188,32 @@ def _environment(imgsz: int) -> dict:
     return env
 
 
-def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _export_is_current(onnx_path: Path, weights: Path) -> bool:
+    """Does this .onnx correspond to these weights?
+
+    The export was skipped whenever a file of the right name existed, so
+    retraining and re-running benchmarked the OLD graph against the NEW
+    checkpoint's accuracy - two different models in one row, and nothing on
+    screen to say so. The digest of the weights it came from is written beside
+    it, so a changed checkpoint forces a re-export instead.
+    """
+    stamp = onnx_path.with_suffix(".onnx.sha256")
+    return (onnx_path.exists() and stamp.exists()
+            and stamp.read_text(encoding="utf-8").strip() == _sha256(weights))
+
+
+def run_one(weights: Path, imgsz: int, data: str, device: str = "0",
+            map_tolerance: float = 0.01) -> dict:
     """Accuracy + latency across every available backend."""
     import torch
     from ultralytics import YOLO
@@ -218,14 +243,48 @@ def run_one(weights: Path, imgsz: int, data: str, device: str = "0") -> dict:
     # skips export, and silently benchmarks best.pt's latency against
     # last.pt's freshly computed accuracy in the same output row.
     onnx_path = weights.parent / f"{weights.stem}_{imgsz}.onnx"
-    if not onnx_path.exists():
+    if not _export_is_current(onnx_path, weights):
         exported = YOLO(str(weights)).export(
             format="onnx", imgsz=imgsz, opset=13,
             simplify=True,  # onnxslim folds constants; smaller graph, faster load
             dynamic=False,  # static shapes let ORT pick better kernels
         )
-        Path(exported).rename(onnx_path)
+        # .replace, not .rename: rename refuses an existing target on Windows,
+        # which never came up while export was skipped whenever the file was
+        # there. Now that a digest mismatch forces a re-export, the stale graph
+        # is exactly what has to be overwritten.
+        Path(exported).replace(onnx_path)
+        onnx_path.with_suffix(".onnx.sha256").write_text(_sha256(weights), encoding="utf-8")
     row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024 ** 2, 2)
+    row["weights_sha256"] = _sha256(weights)[:16]
+
+    # Validate the ONNX graph itself. Reporting the PyTorch mAP beside ONNX
+    # latency invites the reader to assume the export preserved accuracy, which
+    # is an assumption and not a measurement -- opset choice, constant folding
+    # and fp precision can all move it.
+    onnx_metrics = YOLO(str(onnx_path), task="detect").val(
+        data=data, imgsz=imgsz, device=device, verbose=False
+    )
+    row["accuracy"] = {
+        "pytorch": {"mAP50": round(float(metrics.box.map50), 4),
+                    "mAP50_95": round(float(metrics.box.map), 4)},
+        "onnx": {"mAP50": round(float(onnx_metrics.box.map50), 4),
+                 "mAP50_95": round(float(onnx_metrics.box.map), 4)},
+    }
+    d50 = row["accuracy"]["onnx"]["mAP50"] - row["accuracy"]["pytorch"]["mAP50"]
+    d95 = row["accuracy"]["onnx"]["mAP50_95"] - row["accuracy"]["pytorch"]["mAP50_95"]
+    row["accuracy"]["delta"] = {"mAP50": round(d50, 4), "mAP50_95": round(d95, 4),
+                                "tolerance": map_tolerance}
+    print(f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
+          f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}  "
+          f"(delta {d50:+.4f} / {d95:+.4f})")
+    if max(abs(d50), abs(d95)) > map_tolerance:
+        raise SystemExit(
+            f"ONNX accuracy differs from PyTorch by more than {map_tolerance}: "
+            f"mAP50 {d50:+.4f}, mAP50-95 {d95:+.4f}. An export that changes the "
+            f"model is not a deployment artefact -- investigate before publishing "
+            f"latency for it."
+        )
 
     import onnxruntime as ort
     available = ort.get_available_providers()
@@ -251,10 +310,13 @@ def main() -> None:
                         "this setting -- that comparison is CUDA vs CPU by "
                         "definition -- and are skipped, not forced, when "
                         "one isn't available.")
+    p.add_argument("--map-tolerance", type=float, default=0.01,
+                   help="Fail if ONNX mAP differs from PyTorch by more than "
+                        "this. An export is meant to change speed, not the model.")
     p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
     args = p.parse_args()
 
-    row = run_one(args.weights, args.imgsz, args.data, args.device)
+    row = run_one(args.weights, args.imgsz, args.data, args.device, args.map_tolerance)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(row, indent=2))
