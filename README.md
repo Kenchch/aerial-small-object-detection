@@ -468,6 +468,7 @@ docker build -t aerial-detection .
 # Default command: benchmark the mounted checkpoint, write the report out.
 docker run --gpus all \
   -v "$PWD/runs/n_1024/weights:/weights:ro" \
+  -v "$PWD/datasets:/data:ro" \
   -v "$PWD/reports:/out" \
   aerial-detection
 
@@ -484,6 +485,12 @@ docker run --gpus all \
   -v "$PWD/runs:/workspace/runs" \
   aerial-detection src/train.py --model yolo11n.pt --imgsz 1024 --batch 6 --name n_1024
 ```
+
+The dataset is mounted at `/data`, and the image carries
+`docker/VisDrone.yaml` pointing there. The bundled ultralytics spec has a
+`download:` key, so without it the default command would pull the dataset
+into the container's ephemeral filesystem on every run and fail outright
+offline.
 
 `.dockerignore` keeps the build context to `src/` and `requirements.txt`.
 Without it `COPY . .` shipped 60 MB from this checkout — 33 MB of `runs/`

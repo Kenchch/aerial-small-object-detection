@@ -34,6 +34,9 @@ RUN sed -i -E '/^(torch|torchvision)([=<>!~].*)?$/d' requirements.txt \
 # .dockerignore already trims the context; this makes the intent readable from
 # the Dockerfile itself.
 COPY src/ ./src/
+# A dataset spec pointing at /data, instead of the bundled one whose
+# `download:` key pulls 35 GB into the container's ephemeral filesystem.
+COPY docker/VisDrone.yaml ./docker/VisDrone.yaml
 
 # Weights and data are MOUNTED, not baked in. A model inside the image cannot
 # be updated without a rebuild, and the checkpoint is 5.3 MB of build cache
@@ -52,4 +55,4 @@ VOLUME ["/weights", "/data", "/out"]
 # Override the command for anything else:
 #   docker run --gpus all -v ... aerial-detection src/track.py --weights ...
 ENTRYPOINT ["python"]
-CMD ["src/benchmark.py", "--weights", "/weights/best.pt", "--imgsz", "1024", "--out", "/out/benchmark.json"]
+CMD ["src/benchmark.py", "--weights", "/weights/best.pt", "--data", "docker/VisDrone.yaml", "--imgsz", "1024", "--out", "/out/benchmark.json"]
