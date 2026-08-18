@@ -270,9 +270,18 @@ def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
     same inputs. Any of those produce a stale cache hit that benchmarks one
     model and reports another's accuracy.
     """
-    import onnx
-    import onnxslim
-    import ultralytics
+    # importlib.metadata rather than importing the packages: this function is
+    # the cache key, so it has to be computable wherever the cache is consulted,
+    # and CI runs the suite with torch/ultralytics deliberately absent. A
+    # package that is not installed records None - you cannot export without it
+    # anyway, so a real manifest is only ever written where all three exist.
+    from importlib.metadata import PackageNotFoundError, version
+
+    def installed(name: str) -> str | None:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return None
 
     return {
         "weights_sha256": _sha256(weights),
@@ -280,9 +289,9 @@ def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
         "imgsz": imgsz,
         "opset": ONNX_OPSET,
         "simplify": True,
-        "ultralytics": ultralytics.__version__,
-        "onnx": onnx.__version__,
-        "onnxslim": onnxslim.__version__,
+        "ultralytics": installed("ultralytics"),
+        "onnx": installed("onnx"),
+        "onnxslim": installed("onnxslim"),
     }
 
 
