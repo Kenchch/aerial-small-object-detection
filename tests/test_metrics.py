@@ -7,9 +7,12 @@ test is a README table nobody can trust, so the arithmetic was pulled out into
 pure functions and is pinned here with synthetic inputs.
 """
 
+import json
+
 import numpy as np
 import pytest
 
+import benchmark
 from evaluate import error_split, letterbox_scale
 from track import association_remainders
 
@@ -162,3 +165,68 @@ def test_association_remainder_rejects_ragged_inputs():
     rather than report that something went wrong collecting it."""
     with pytest.raises(ValueError):
         association_remainders([1.0, 2.0], [0.1], [0.1, 0.2], [0.1, 0.2])
+
+
+# --- export cache ---------------------------------------------------------- #
+
+
+def _stub_export(tmp_path):
+    """A weights file and an .onnx that stand in for the real pair."""
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"weights-bytes")
+    onnx = tmp_path / "best_1024.onnx"
+    onnx.write_bytes(b"onnx-bytes")
+    return weights, onnx
+
+
+def _write_stamp(onnx, weights, imgsz):
+    benchmark._MANIFEST_STAMP(onnx).write_text(
+        json.dumps(benchmark._export_manifest(onnx, weights, imgsz), indent=2),
+        encoding="utf-8",
+    )
+
+
+def test_an_unchanged_export_is_reused(tmp_path):
+    """The writer stamped .onnx.sha256 while the reader looked for
+    .onnx.manifest.json, so the check never found a stamp, always returned
+    False, and every run re-exported. The cache existed and could not be hit."""
+    weights, onnx = _stub_export(tmp_path)
+    _write_stamp(onnx, weights, 1024)
+    assert benchmark._export_is_current(onnx, weights, 1024) is True
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "weights_sha256",
+        "onnx_sha256",
+        "imgsz",
+        "opset",
+        "simplify",
+        "ultralytics",
+        "onnx",
+        "onnxslim",
+    ],
+)
+def test_any_manifest_field_changing_invalidates_the_cache(tmp_path, field):
+    """A weights digest alone missed a re-run at another --imgsz, a different
+    opset, and a toolchain upgrade emitting a different graph from identical
+    inputs - each a stale cache hit benchmarking one model and reporting
+    another's accuracy."""
+    weights, onnx = _stub_export(tmp_path)
+    _write_stamp(onnx, weights, 1024)
+
+    stamp = benchmark._MANIFEST_STAMP(onnx)
+    recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    recorded[field] = "changed" if isinstance(recorded[field], str) else 999
+    stamp.write_text(json.dumps(recorded), encoding="utf-8")
+
+    assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+
+def test_a_missing_or_unreadable_stamp_forces_a_re_export(tmp_path):
+    weights, onnx = _stub_export(tmp_path)
+    assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+    benchmark._MANIFEST_STAMP(onnx).write_text("{not json", encoding="utf-8")
+    assert benchmark._export_is_current(onnx, weights, 1024) is False

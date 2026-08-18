@@ -1,0 +1,26 @@
+# VisDrone spec for the container, pointing at the mounted volume.
+#
+# The bundled ultralytics VisDrone.yaml uses `path: VisDrone`, resolved against
+# ultralytics' own datasets_dir setting - which inside a fresh container points
+# at an empty directory, so `download:` fires and pulls the whole dataset into
+# the container's ephemeral filesystem. That is a long download on every run and
+# an outright failure offline.
+#
+# This file has no `download:` key on purpose. If /data is not mounted the run
+# fails saying the images are missing, which is the honest outcome: the image
+# does not carry the dataset and should not fetch 35 GB to hide that.
+path: /data/VisDrone
+train: images/train
+val: images/val
+
+names:
+  0: pedestrian
+  1: people
+  2: bicycle
+  3: car
+  4: van
+  5: truck
+  6: tricycle
+  7: awning-tricycle
+  8: bus
+  9: motor

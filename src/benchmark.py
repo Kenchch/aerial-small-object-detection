@@ -252,6 +252,15 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _MANIFEST_STAMP(onnx_path: Path) -> Path:
+    """The one place the stamp's filename is decided.
+
+    Reader and writer disagreeing about it is what made the cache unhittable,
+    so neither spells it out any more.
+    """
+    return onnx_path.with_suffix(".onnx.manifest.json")
+
+
 def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
     """Everything that determines whether a cached .onnx is the right one.
 
@@ -286,7 +295,7 @@ def _export_is_current(onnx_path: Path, weights: Path, imgsz: int) -> bool:
     checkpoint's accuracy - two different models in one row, with nothing on
     screen to say so.
     """
-    stamp = onnx_path.with_suffix(".onnx.manifest.json")
+    stamp = _MANIFEST_STAMP(onnx_path)
     if not (onnx_path.exists() and stamp.exists()):
         return False
     try:
@@ -343,9 +352,17 @@ def run_one(
         # there. Now that a digest mismatch forces a re-export, the stale graph
         # is exactly what has to be overwritten.
         Path(exported).replace(onnx_path)
-        onnx_path.with_suffix(".onnx.sha256").write_text(
-            _sha256(weights), encoding="utf-8"
+        # Write the SAME stamp _export_is_current() reads. It wrote
+        # .onnx.sha256 while the check looked for .onnx.manifest.json, so the
+        # check never found a stamp, always returned False, and every run
+        # re-exported - the cache existed but could not be hit.
+        _MANIFEST_STAMP(onnx_path).write_text(
+            json.dumps(_export_manifest(onnx_path, weights, imgsz), indent=2),
+            encoding="utf-8",
         )
+        # A stamp left by the previous scheme would otherwise sit there forever.
+        onnx_path.with_suffix(".onnx.sha256").unlink(missing_ok=True)
+
     row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024**2, 2)
     row["export"] = _export_manifest(onnx_path, weights, imgsz)
 
