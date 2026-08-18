@@ -1,0 +1,50 @@
+# .gitignore does NOT apply to a Docker build context - only this file does.
+# Without it `COPY . .` ships 60 MB from this checkout: 33 MB of runs/
+# (including 21.6 MB of weights that .gitignore keeps out of git and Docker
+# sends anyway), 21 MB of .git, and 6.5 MB of demo video. On a machine where
+# the VisDrone dataset sits inside the repo it is tens of GB, and every byte is
+# uploaded to the daemon before the first instruction runs.
+#
+# The image needs src/ and requirements.txt. Everything else is either build
+# output, evidence for the README, or someone's local state.
+
+.git
+.github
+.gitignore
+.dockerignore
+
+# Training artefacts and weights: mounted at runtime, never baked in. A model
+# inside the image is a model nobody can update without a rebuild.
+runs/
+datasets/
+*.pt
+*.onnx
+*.engine
+*.onnx.manifest.json
+
+# Reports, demo media and their sources.
+reports/
+workshop/
+*.mp4
+*.gif
+
+# Local environments and caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editor / OS.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and notes.
+*.log
+*.err
+*.pid
+PROGRESS.md

@@ -29,6 +29,27 @@ COPY requirements.txt .
 RUN sed -i -E '/^(torch|torchvision)([=<>!~].*)?$/d' requirements.txt \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Named explicitly rather than `COPY . .`, so what lands in the image is a
+# decision rather than whatever the working directory happens to contain.
+# .dockerignore already trims the context; this makes the intent readable from
+# the Dockerfile itself.
+COPY src/ ./src/
 
-CMD ["python", "src/train.py", "--help"]
+# Weights and data are MOUNTED, not baked in. A model inside the image cannot
+# be updated without a rebuild, and the checkpoint is 5.3 MB of build cache
+# nobody asked for.
+VOLUME ["/weights", "/data", "/out"]
+
+# A real default. `--help` as the CMD made `docker run <image>` a no-op that
+# proved only that Python starts - which is exactly the "Docker was added to
+# tick a box" impression it gives.
+#
+#   docker run --gpus all \
+#     -v "$PWD/runs/n_1024/weights:/weights:ro" \
+#     -v "$PWD/reports:/out" \
+#     aerial-detection
+#
+# Override the command for anything else:
+#   docker run --gpus all -v ... aerial-detection src/track.py --weights ...
+ENTRYPOINT ["python"]
+CMD ["src/benchmark.py", "--weights", "/weights/best.pt", "--imgsz", "1024", "--out", "/out/benchmark.json"]
