@@ -458,12 +458,39 @@ settings.update(
 
 The dataset downloads automatically on first run.
 
-Alternatively, build the provided image (CUDA 12.4, matching the pins above):
+Alternatively, build the provided image (CUDA 12.4, matching the pins above).
+Weights and data are **mounted, not baked in** — a model inside an image cannot
+be updated without a rebuild:
 
 ```bash
 docker build -t aerial-detection .
-docker run --gpus all -it -v ${PWD}/datasets:/workspace/datasets aerial-detection bash
+
+# Default command: benchmark the mounted checkpoint, write the report out.
+docker run --gpus all \
+  -v "$PWD/runs/n_1024/weights:/weights:ro" \
+  -v "$PWD/reports:/out" \
+  aerial-detection
+
+# Anything else is an override of the command:
+docker run --gpus all \
+  -v "$PWD/runs/n_1024/weights:/weights:ro" \
+  -v "$PWD/reports:/data" \
+  -v "$PWD/reports:/out" \
+  aerial-detection src/track.py --weights /weights/best.pt --source /data/demo_pan.mp4
+
+# Training needs the dataset mounted as well:
+docker run --gpus all \
+  -v "$PWD/datasets:/workspace/datasets" \
+  -v "$PWD/runs:/workspace/runs" \
+  aerial-detection src/train.py --model yolo11n.pt --imgsz 1024 --batch 6 --name n_1024
 ```
+
+`.dockerignore` keeps the build context to `src/` and `requirements.txt`.
+Without it `COPY . .` shipped 60 MB from this checkout — 33 MB of `runs/`
+(including 21.6 MB of weights that `.gitignore` excludes from git and Docker
+sends anyway, since `.gitignore` does not apply to a build context), 21 MB of
+`.git`, and the demo video. CI builds the image on every push and checks that
+every script answers `--help` inside it.
 
 ## Usage
 

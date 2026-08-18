@@ -77,3 +77,40 @@ jobs:
             --ignore-vuln PYSEC-2026-2286 --ignore-vuln CVE-2025-2148 \
             --ignore-vuln CVE-2025-2149  --ignore-vuln CVE-2025-2998 \
             --ignore-vuln CVE-2025-2999  --ignore-vuln CVE-2025-3001
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Dockerfile had never been built by anything. It has since carried a
+      # sed that silently stopped matching, a base image whose torch disagreed
+      # with requirements.txt, a missing libGL that would have taken down every
+      # command in the image, and a `COPY . .` shipping 60 MB of weights, git
+      # history and demo video. Each was found by reading rather than building,
+      # which is not a method that scales.
+      - name: Build the image
+        run: docker build -t aerial-detection .
+
+      # `docker run <image>` with no mounts must fail for a stated reason, not
+      # an ImportError. The default command needs /weights, and saying so is the
+      # difference between a usable image and a puzzle.
+      - name: Default command reports what it needs
+        run: |
+          set +e
+          out=$(docker run --rm aerial-detection 2>&1); code=$?
+          set -e
+          echo "$out" | tail -5
+          test $code -ne 0 || { echo "expected a non-zero exit without /weights"; exit 1; }
+          echo "$out" | grep -qiE "weights|not found|No such file" \
+            || { echo "the failure did not mention the missing weights"; exit 1; }
+
+      # Every script must still answer --help inside the image, with no mounts
+      # and no GPU. This is the containerised half of test_cli.py.
+      - name: --help works inside the image
+        run: |
+          for s in train evaluate benchmark track make_demo_clip; do
+            docker run --rm aerial-detection "src/$s.py" --help > /dev/null \
+              || { echo "src/$s.py --help failed inside the image"; exit 1; }
+            echo "  src/$s.py OK"
+          done
