@@ -114,7 +114,8 @@ jobs:
           cmd=$(docker inspect -f '{{json .Config.Cmd}}' aerial-detection)
           echo "$cmd"
           echo "$cmd" | grep -q -- "--data" || { echo "CMD does not pass --data"; exit 1; }
-          docker run --rm aerial-detection python -c             "import yaml; c=yaml.safe_load(open('docker/VisDrone.yaml'));              assert c['path'].startswith('/data'), c['path'];              assert 'download' not in c, 'the container spec must not auto-download';              print('  container dataset spec ->', c['path'])"
+          # ENTRYPOINT is already python, so the command starts at -c.
+          docker run --rm aerial-detection -c             "import yaml; c=yaml.safe_load(open('docker/VisDrone.yaml'));              assert c['path'].startswith('/data'), c['path'];              assert 'download' not in c, 'the container spec must not auto-download';              print('  container dataset spec ->', c['path'])"
 
       # Every script must still answer --help inside the image, with no mounts
       # and no GPU. This is the containerised half of test_cli.py.
