@@ -1,5 +1,7 @@
 # Small-Object Detection on Drone Imagery
 
+[![CI](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml)
+
 Object detection, tracking and deployment benchmarking with YOLO11 on
 VisDrone2019 — trained, evaluated, exported to ONNX, and run through a
 tracking pipeline with a measured deployment profile.
@@ -184,21 +186,21 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 11.08 ms · 90.3 FPS | 13.67 ms · 73.2 FPS |
-| ONNX Runtime (CUDA) | **9.21 ms · 108.6 FPS** | **11.19 ms · 89.4 FPS** |
-| ONNX Runtime (CPU) | 93.2 ms · 10.7 FPS | 93.2 ms · 10.7 FPS |
+| PyTorch (CUDA, eager) | 11.74 ms · 85.2 FPS | 14.48 ms · 69.1 FPS |
+| ONNX Runtime (CUDA) | **9.27 ms · 107.9 FPS** | **11.49 ms · 87.0 FPS** |
+| ONNX Runtime (CPU) | 102.94 ms · 9.7 FPS | 102.94 ms · 9.7 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
 `+ host transfer` starts from a CPU array and brings the output back.
 ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
 by construction; timing that against a GPU-resident PyTorch forward — which is
-what this table used to do — charges ONNX ~2.3 ms of copying PyTorch never
-paid, and reported the export as **8 % faster when like-for-like it is 17 %**.
+what this table used to do — charges ONNX ~2.2 ms of copying PyTorch never
+paid, and reported the export as **2 % faster when like-for-like it is 21 %**.
 On CPU there is no copy to separate, so the two columns coincide.
 
-ONNX is 17 % faster core-to-core and 18 % transfer-to-transfer. The more
-decisive number is still CPU: **10.1× slower** than ONNX on GPU — the case for
+ONNX is 21 % faster core-to-core and 21 % transfer-to-transfer. The more
+decisive number is still CPU: **11.1× slower** than ONNX on GPU — the case for
 keeping inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
@@ -253,26 +255,27 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 1.01 ms | 1.24 ms |
-| detect + track | 33.87 ms | **103.02 ms** |
-| ├ preprocess | 5.35 ms | |
-| ├ forward | 13.29 ms | |
+| decode | 0.81 ms | 1.1 ms |
+| detect + track | 31.83 ms | **96.27 ms** |
+| ├ preprocess | 4.66 ms | |
+| ├ forward | 13.11 ms | |
 | ├ postprocess (NMS) | 1.78 ms | |
-| └ association + overhead | 12.19 ms | |
-| annotate | 3.18 ms | 3.94 ms |
-| encode | 2.42 ms | 2.55 ms |
-| **accounted** | | **110.75 ms** |
-| **wall per frame** | | **110.83 ms** |
+| └ association + overhead | 11.82 ms | |
+| annotate | 3.03 ms | 3.87 ms |
+| encode | 2.5 ms | 2.73 ms |
+| open + flush (once per run) | | 1.291 ms |
+| **accounted** | | **105.25 ms** |
+| **wall per frame** | | **105.33 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 32.61 against 33.87 here. That is the honest form: the frame
+parent median — 31.37 against 31.83 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (33.87 ms) is not the same measurement as the 11.08 ms
-PyTorch core row in the backend table above, and the 22.79 ms between them is the
+**`detect + track` (31.83 ms) is not the same measurement as the 11.74 ms
+PyTorch core row in the backend table above, and the 20.09 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -282,26 +285,26 @@ above, taken from Ultralytics' `Results.speed`, are where that time goes.
 reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
-**The forward pass is 39 % of this stage. Preprocessing and association are
+**The forward pass is 41 % of this stage. Preprocessing and association are
 another 52 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.58 ms on the forward pass, while 20.58 ms per frame sits in the
+buys 2.47 ms on the forward pass, while 18.72 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.08 → 13.29 ms difference on the forward pass itself is
+The remaining 11.74 → 13.11 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **6,225 ms — 184× the steady-state 33.9 ms**, from CUDA context
+frame costs **5,622 ms — 177× the steady-state 31.83 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (103.02 ms) and the median (33.87 ms), which is why this
-clip's end-to-end throughput (**9.0 FPS**) is well below its steady-state rate.
+gap between the mean (96.27 ms) and the median (31.83 ms), which is why this
+clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **40.48 ms/frame → 24.7 FPS**, not the ~30 FPS a detect+track-only
-figure would suggest, and nothing like the 89 FPS the ONNX row implies. That
+— which gives **38.17 ms/frame → 26.2 FPS**, not the ~31 FPS a detect+track-only
+figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
 
