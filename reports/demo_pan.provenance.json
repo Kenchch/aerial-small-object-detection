@@ -16,9 +16,10 @@
       765
     ],
     "source_labelled_objects": 317,
-    "selection": "densest val frame by labelled object count",
+    "selection": "named with --source-image",
     "dataset": "VisDrone",
-    "dataset_val_images": 548,
+    "dataset_split": "val",
+    "dataset_split_images": 548,
     "crop_fraction": 0.62,
     "crop_size": [
       843,

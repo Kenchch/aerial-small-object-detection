@@ -88,6 +88,23 @@ def main() -> None:
         "--out", type=Path, default=PROJECT_ROOT / "reports" / "demo_pan.mp4"
     )
     p.add_argument(
+        "--source-image",
+        type=Path,
+        default=None,
+        help="Use this frame instead of searching the val split for "
+        "the densest one. The search picks by label count against "
+        "whatever dataset revision is installed, so naming the file "
+        "is what makes a clip exactly reproducible - see the sha256 "
+        "in the clip's .provenance.json.",
+    )
+    p.add_argument(
+        "--expected-source-sha256",
+        default=None,
+        help="Refuse to run unless the source frame has this digest. "
+        "Pair it with --source-image to reproduce a published clip "
+        "byte for byte, or to find out that you cannot.",
+    )
+    p.add_argument(
         "--crop",
         type=float,
         default=0.62,
@@ -100,12 +117,48 @@ def main() -> None:
     import cv2
     import numpy as np
 
-    src_path, n_obj = densest_val_image()
+    if args.source_image is not None:
+        src_path = args.source_image
+        if not src_path.is_file():
+            raise SystemExit(f"{src_path} does not exist")
+        # <root>/images/<split>/x.jpg  ->  <root>/labels/<split>/x.txt.
+        # None, not a sentinel count: an arbitrary --source-image need not sit
+        # in a VisDrone tree at all, and "we did not find labels" is different
+        # from "there were none".
+        label = (
+            src_path.parent.parent.parent
+            / "labels"
+            / src_path.parent.name
+            / (src_path.stem + ".txt")
+        )
+        n_obj = (
+            sum(1 for line in label.read_text().splitlines() if line.strip())
+            if label.is_file()
+            else None
+        )
+    else:
+        src_path, n_obj = densest_val_image()
+
+    if args.expected_source_sha256:
+        # Checked BEFORE the clip is built, so a mismatch costs nothing and is
+        # unambiguous. "Re-run the script" is not a way to reproduce a clip if
+        # the frame it starts from can quietly differ.
+        actual = sha256(src_path)
+        if actual != args.expected_source_sha256:
+            raise SystemExit(
+                f"{src_path.name} has sha256 {actual}, not "
+                f"{args.expected_source_sha256}. This is a different frame, so "
+                f"the clip would be a different clip."
+            )
+
     img = cv2.imread(str(src_path))
     if img is None:
         raise SystemExit(f"cannot decode {src_path}")
     H, W = img.shape[:2]
-    print(f"source : {src_path.name}  ({W}x{H}, {n_obj} labelled objects)")
+    print(
+        f"source : {src_path.name}  ({W}x{H}, "
+        f"{'unknown' if n_obj is None else n_obj} labelled objects)"
+    )
 
     cw, ch = int(W * args.crop), int(H * args.crop)
     # Even output dimensions keep the H.264/mp4v encoder happy.
@@ -162,7 +215,11 @@ def main() -> None:
             "source_sha256": sha256(src_path),
             "source_size": [W, H],
             "source_labelled_objects": n_obj,
-            "selection": "densest val frame by labelled object count",
+            "selection": (
+                "named with --source-image"
+                if args.source_image is not None
+                else "densest val frame by labelled object count"
+            ),
             # The dataset's NAME and size, not its path. This file is
             # committed, and where the dataset happens to sit on one machine is
             # not reproducibility information - it is someone's drive letter.
@@ -170,7 +227,8 @@ def main() -> None:
             # the frame is chosen by scanning that split, so a different count
             # means a different selection is possible.
             "dataset": src_path.parent.parent.parent.name,
-            "dataset_val_images": len(list(src_path.parent.glob("*.jpg"))),
+            "dataset_split": src_path.parent.name,
+            "dataset_split_images": len(list(src_path.parent.glob("*.jpg"))),
             "crop_fraction": args.crop,
             "crop_size": [cw, ch],
             "pan": {

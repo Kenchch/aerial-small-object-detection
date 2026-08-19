@@ -255,27 +255,37 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.78 ms | 0.93 ms |
-| detect + track | 31.19 ms | **93.51 ms** |
-| ├ preprocess | 4.52 ms | |
-| ├ forward | 12.83 ms | |
-| ├ postprocess (NMS) | 1.68 ms | |
-| └ association + overhead | 11.2 ms | |
-| annotate | 2.92 ms | 3.51 ms |
-| encode | 2.31 ms | 2.44 ms |
-| open + flush (once per run) | | 0.094 ms |
-| **accounted** | | **100.48 ms** |
-| **wall per frame** | | **100.55 ms** |
+| decode | 0.99 ms | 1.15 ms |
+| detect + track | 35.3 ms | **103.44 ms** |
+| ├ preprocess | 5.48 ms | |
+| ├ forward | 14.52 ms | |
+| ├ postprocess (NMS) | 1.8 ms | |
+| └ association + overhead | 11.19 ms | |
+| annotate | 2.97 ms | 3.53 ms |
+| encode | 2.46 ms | 2.61 ms |
+| open + flush (once per run) | | 0.092 ms |
+| **accounted** | | **110.83 ms** |
+| **wall per frame** | | **110.92 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 30.23 against 31.19 here. That is the honest form: the frame
+parent median — 32.99 against 35.3 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (31.19 ms) is not the same measurement as the 11.74 ms
-PyTorch core row in the backend table above, and the 19.45 ms between them is the
+**One run, on a thermally-limited GPU.** Re-running this on the same machine
+over one session produced forward-pass medians of 12.5, 12.5, 13.1, 14.5 and
+16.3 ms — a ±13 % spread driven by how hot the card already was, with the
+slowest immediately after a benchmark run and the fastest from cold. The
+committed profile is a cold-start run, which is the protocol the benchmark
+section states, but the figures here should be read as one sample from that
+range rather than a stable measurement. The *ratios* between stages are far
+steadier than the absolute milliseconds, and they are what the argument below
+rests on.
+
+**`detect + track` (35.3 ms) is not the same measurement as the 11.74 ms
+PyTorch core row in the backend table above, and the 23.56 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -286,24 +296,28 @@ reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
 **The forward pass is 41 % of this stage. Preprocessing and association are
-another 50 %,** and neither is affected by the export format. That is the
+another 47 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.47 ms on the forward pass, while 18.36 ms per frame sits in the
+buys 2.47 ms on the forward pass, while 20.78 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.74 → 12.83 ms difference on the forward pass itself is
+The remaining 11.74 → 14.52 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,586 ms — 179× the steady-state 31.19 ms**, from CUDA context
-creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (93.51 ms) and the median (31.19 ms), which is why this
-clip's end-to-end throughput (**9.9 FPS**) is well below its steady-state rate.
+frame costs **6,264 ms — 177× the steady-state 35.3 ms**, which is cold-start
+initialisation: the CUDA context and cuDNN's autotuning, plus Ultralytics
+building its predictor and the ByteTrack instance, both of which are
+constructed lazily on the first `model.track()` call. It is not attributed to
+CUDA alone because it has not been broken down — what the profile shows is that
+the first frame costs this, not which part of it costs what. Amortised over 90 frames that is most of the
+gap between the mean (103.44 ms) and the median (35.3 ms), which is why this
+clip's end-to-end throughput (**9.0 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **37.20 ms/frame → 26.9 FPS**, not the ~32 FPS a detect+track-only
+— which gives **41.72 ms/frame → 24.0 FPS**, not the ~28 FPS a detect+track-only
 figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
@@ -551,10 +565,22 @@ python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 # ONNX export + latency across backends (run on an idle GPU)
 python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 
-# Video inference + ByteTrack, with a staged latency profile
-python src/make_demo_clip.py --frames 90
+# Video inference + ByteTrack, with a staged latency profile.
+#
+# The plain form picks the densest val frame, which depends on which dataset
+# revision is installed. To rebuild the exact clip the committed tracking
+# numbers were measured on - byte for byte, verified - name the frame and its
+# digest; the run refuses rather than producing a different clip:
+python src/make_demo_clip.py --frames 90 --fps 15 \
+  --source-image "$DATASETS/VisDrone/images/val/0000295_02400_d_0000033.jpg" \
+  --expected-source-sha256 f4e6fc5838b411648e0d10845540309874c23bd79a402d6be68bf57cbedf6771
+
 python src/track.py --weights runs/n_1024/weights/best.pt --source reports/demo_pan.mp4
 ```
+
+`reports/demo_pan.provenance.json` records that digest, the crop and pan, and
+the clip's own sha256; `reports/tracking.json` embeds it and says whether the
+file it profiled matches.
 
 ## Layout
 
