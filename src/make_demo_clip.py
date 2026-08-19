@@ -105,6 +105,22 @@ def main() -> None:
         "byte for byte, or to find out that you cannot.",
     )
     p.add_argument(
+        "--expected-clip-sha256",
+        default=None,
+        help="Refuse to publish the result unless the finished mp4 has "
+        "this digest. Without it the sidecar is written from the "
+        "clip that was just made, so it always agrees with itself "
+        "and 'verified' means nothing.",
+    )
+    p.add_argument(
+        "--expected-frames-sha256",
+        default=None,
+        help="Same, over the DECODED frame bytes rather than the "
+        "container. Encoder-independent, so it still holds across "
+        "FFmpeg and OpenCV versions that pack identical pixels "
+        "into different mp4 bytes.",
+    )
+    p.add_argument(
         "--crop",
         type=float,
         default=0.62,
@@ -165,31 +181,76 @@ def main() -> None:
     ow, oh = cw - (cw % 2), ch - (ch % 2)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Written to a temporary file and moved into place only once it has been
+    # checked. Writing straight to --out destroys the published clip before
+    # anything has established that the replacement is the same clip.
+    #
+    # The suffix is kept: OpenCV chooses its container from the file
+    # EXTENSION, so "demo_pan.mp4.tmp" simply fails to open, with a message
+    # about the mp4v codec that points nowhere near the real cause.
+    staged = args.out.with_name(f"{args.out.stem}.tmp{args.out.suffix}")
     writer = cv2.VideoWriter(
-        str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (ow, oh)
+        str(staged), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (ow, oh)
     )
     # An unopened writer makes write() a silent no-op -- this script would
     # otherwise print "wrote ... (N frames)" and exit 0 with no output file,
     # and the failure would only surface in track.py, the next command in
     # the README's tracking walkthrough, pointing at the wrong script.
     if not writer.isOpened():
+        # Release and clear up before raising: an unopened writer still holds a
+        # handle, and the zero-byte file it left behind is the next run's
+        # confusing leftover.
+        writer.release()
+        staged.unlink(missing_ok=True)
         raise SystemExit(
-            f"cannot open VideoWriter for {args.out} "
+            f"cannot open VideoWriter for {staged} "
             f"(mp4v codec unavailable in this OpenCV build?)"
         )
 
     max_dx, max_dy = W - cw, H - ch
-    for i in range(args.frames):
-        t = i / max(1, args.frames - 1)
-        # Ease-in-out so the pan accelerates and settles like real gimbal motion
-        # rather than starting and stopping instantaneously.
-        e = 0.5 - 0.5 * np.cos(np.pi * t)
-        x = int(e * max_dx)
-        y = int((0.5 - 0.5 * np.cos(2 * np.pi * t)) * max_dy)  # one vertical sweep
-        crop = img[y : y + ch, x : x + cw]
-        writer.write(crop[:oh, :ow])
+    # Hashed as the frames are produced. The container digest identifies these
+    # exact mp4 bytes; this identifies the PIXELS, which is the thing that
+    # actually has to match. Two FFmpeg builds can pack identical frames into
+    # different files, and then a byte comparison says "different clip" about
+    # a clip that is not different.
+    frames_digest = hashlib.sha256()
+    try:
+        for i in range(args.frames):
+            t = i / max(1, args.frames - 1)
+            # Ease-in-out so the pan accelerates and settles like real gimbal
+            # motion rather than starting and stopping instantaneously.
+            e = 0.5 - 0.5 * np.cos(np.pi * t)
+            x = int(e * max_dx)
+            y = int((0.5 - 0.5 * np.cos(2 * np.pi * t)) * max_dy)  # vertical sweep
+            crop = img[y : y + ch, x : x + cw][:oh, :ow]
+            frames_digest.update(np.ascontiguousarray(crop).tobytes())
+            writer.write(crop)
+    finally:
+        # The writer holds an OS handle and, on Windows, a lock on the file. A
+        # failure mid-loop used to leave both to the garbage collector, so the
+        # obvious next step - delete the half-written file and retry - failed
+        # for a second, unrelated-looking reason.
+        writer.release()
 
-    writer.release()
+    clip_sha, frames_sha = sha256(staged), frames_digest.hexdigest()
+
+    # Checked BEFORE the published clip is replaced. Without this the sidecar
+    # was written from whatever had just been produced, so it always agreed
+    # with itself: regenerate a different clip and the record simply recorded
+    # the different clip, and every downstream "matches" was a tautology.
+    for label, actual, expected in (
+        ("clip", clip_sha, args.expected_clip_sha256),
+        ("frame content", frames_sha, args.expected_frames_sha256),
+    ):
+        if expected and actual != expected:
+            staged.unlink(missing_ok=True)
+            raise SystemExit(
+                f"{label} sha256 is {actual}, not {expected}. The existing "
+                f"{args.out.name} and its provenance are untouched."
+            )
+
+    staged.replace(args.out)
 
     # The clip is not in the repo - it is 6.5 MB of build output - so "re-run
     # make_demo_clip.py" is not by itself a way to get the same clip back.
@@ -203,7 +264,10 @@ def main() -> None:
     provenance = {
         "clip": {
             "path": args.out.name,
-            "sha256": sha256(args.out),
+            "sha256": clip_sha,
+            # Encoder-independent identity: the decoded pixels, in order.
+            # The container digest is what changes when FFmpeg does.
+            "frames_sha256": frames_sha,
             "frames": args.frames,
             "fps": args.fps,
             "width": ow,
@@ -246,6 +310,8 @@ def main() -> None:
 
     print(f"wrote  : {args.out}  ({args.frames} frames @ {args.fps} fps, {ow}x{oh})")
     print(f"         {provenance_path(args.out).name}")
+    print(f"clip   : sha256 {clip_sha}")
+    print(f"frames : sha256 {frames_sha}")
     print(
         "\nNOTE: synthetic camera motion over a real frame. Validates the "
         "pipeline;\n      it is not a tracking accuracy benchmark. See module "
