@@ -1,33 +1,38 @@
 {
   "frames": 90,
-  "wall_s": 9.97,
-  "end_to_end_fps": 9.0,
-  "per_frame_wall_ms": 110.83,
+  "wall_s": 9.48,
+  "end_to_end_fps": 9.5,
+  "per_frame_wall_ms": 105.33,
   "stage_ms_median": {
-    "decode": 1.01,
-    "detect_and_track": 33.87,
-    "annotate": 3.18,
-    "encode": 2.42
+    "decode": 0.81,
+    "detect_and_track": 31.83,
+    "annotate": 3.03,
+    "encode": 2.5
+  },
+  "open_and_flush_ms": {
+    "setup": 114.75,
+    "flush": 1.48,
+    "amortised_per_frame": 1.291
   },
   "stage_ms_mean": {
-    "decode": 1.24,
-    "detect_and_track": 103.02,
-    "annotate": 3.94,
-    "encode": 2.55
+    "decode": 1.1,
+    "detect_and_track": 96.27,
+    "annotate": 3.87,
+    "encode": 2.73
   },
   "detect_and_track_ms_median": {
-    "preprocess": 5.35,
-    "forward": 13.29,
+    "preprocess": 4.66,
+    "forward": 13.11,
     "postprocess_nms": 1.78,
-    "association_and_overhead": 12.19
+    "association_and_overhead": 11.82
   },
   "warmup": {
-    "first_frame_ms": 6225.3,
-    "steady_state_ms": 33.87,
-    "warmup_penalty_x": 183.8
+    "first_frame_ms": 5621.6,
+    "steady_state_ms": 31.83,
+    "warmup_penalty_x": 176.6
   },
   "reconciliation": {
-    "accounted_mean_ms": 110.75,
+    "accounted_mean_ms": 105.25,
     "unaccounted_ms": 0.08,
     "coverage_pct": 99.9
   },
@@ -43,8 +48,11 @@
   },
   "config": {
     "weights": "runs/n_1024/weights/best.pt",
+    "source": "reports/demo_pan.mp4",
+    "out": "reports/track_out.mp4",
     "imgsz": 1024,
     "conf": 0.25,
-    "tracker": "bytetrack.yaml"
+    "tracker": "bytetrack.yaml",
+    "device": "0"
   }
 }
