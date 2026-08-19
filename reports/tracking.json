@@ -1,39 +1,39 @@
 {
   "frames": 90,
-  "wall_s": 9.05,
-  "end_to_end_fps": 9.9,
-  "per_frame_wall_ms": 100.55,
+  "wall_s": 9.98,
+  "end_to_end_fps": 9.0,
+  "per_frame_wall_ms": 110.92,
   "stage_ms_median": {
-    "decode": 0.78,
-    "detect_and_track": 31.19,
-    "annotate": 2.92,
-    "encode": 2.31
+    "decode": 0.99,
+    "detect_and_track": 35.3,
+    "annotate": 2.97,
+    "encode": 2.46
   },
   "open_and_flush_ms": {
-    "setup": 7.55,
-    "flush": 0.88,
-    "amortised_per_frame": 0.094
+    "setup": 7.2,
+    "flush": 1.07,
+    "amortised_per_frame": 0.092
   },
   "stage_ms_mean": {
-    "decode": 0.93,
-    "detect_and_track": 93.51,
-    "annotate": 3.51,
-    "encode": 2.44
+    "decode": 1.15,
+    "detect_and_track": 103.44,
+    "annotate": 3.53,
+    "encode": 2.61
   },
   "detect_and_track_ms_median": {
-    "preprocess": 4.52,
-    "forward": 12.83,
-    "postprocess_nms": 1.68,
-    "association_and_overhead": 11.2
+    "preprocess": 5.48,
+    "forward": 14.52,
+    "postprocess_nms": 1.8,
+    "association_and_overhead": 11.19
   },
   "warmup": {
-    "first_frame_ms": 5586.2,
-    "steady_state_ms": 31.19,
-    "warmup_penalty_x": 179.1
+    "first_frame_ms": 6263.5,
+    "steady_state_ms": 35.3,
+    "warmup_penalty_x": 177.4
   },
   "reconciliation": {
-    "accounted_mean_ms": 100.48,
-    "unaccounted_ms": 0.07,
+    "accounted_mean_ms": 110.83,
+    "unaccounted_ms": 0.09,
     "coverage_pct": 99.9
   },
   "tracks": {
@@ -54,7 +54,8 @@
     "tracker": "bytetrack.yaml"
   },
   "environment": {
-    "device": "0",
+    "device_requested": "0",
+    "device_resolved": "cuda:0",
     "opencv": "5.0.0",
     "torch": "2.6.0+cu124",
     "cuda": "12.4",
@@ -73,9 +74,10 @@
         765
       ],
       "source_labelled_objects": 317,
-      "selection": "densest val frame by labelled object count",
+      "selection": "named with --source-image",
       "dataset": "VisDrone",
-      "dataset_val_images": 548,
+      "dataset_split": "val",
+      "dataset_split_images": 548,
       "crop_fraction": 0.62,
       "crop_size": [
         843,

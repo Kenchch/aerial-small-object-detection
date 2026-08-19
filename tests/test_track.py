@@ -122,8 +122,89 @@ def test_a_clip_with_no_record_still_carries_its_digest(tmp_path):
     assert "generator" not in info
 
 
-def test_an_unreadable_record_does_not_take_the_run_down(tmp_path):
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        ("{not json", "not readable JSON"),
+        ("[]", "top level must be a JSON object"),
+        ('"a string"', "top level must be a JSON object"),
+        ('{"generator": {}}', 'missing "clip"'),
+        ('{"clip": {}}', 'missing "generator"'),
+        ('{"clip": "not an object", "generator": {}}', '"clip" must be a JSON object'),
+        ('{"clip": {}, "generator": []}', '"generator" must be a JSON object'),
+    ],
+)
+def test_a_malformed_record_is_refused_before_any_inference(tmp_path, body, match):
+    """Only a JSON *parse* failure was handled.
+
+    A sidecar that parsed but was a list, or an object whose `clip` was a
+    string, raised AttributeError from inside the report builder - after ninety
+    frames had already been inferred. A minute of GPU time to be told a 2 KB
+    JSON file is the wrong shape. read_source_record is called before the model
+    loads, and says what is wrong and how to fix it.
+
+    Refused, not ignored: silently dropping a malformed sidecar produces a
+    report that looks provenance-free when it is actually provenance-broken,
+    and those need different fixes.
+    """
     clip = tmp_path / "demo_pan.mp4"
     clip.write_bytes(b"x")
-    (tmp_path / "demo_pan.provenance.json").write_text("{not json", encoding="utf-8")
-    assert track._source_provenance(clip)["sha256"] == track._sha256(clip)
+    (tmp_path / "demo_pan.provenance.json").write_text(body, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        track.read_source_record(clip)
+    with pytest.raises(ValueError, match=match):
+        track._source_provenance(clip)
+
+
+def test_no_record_at_all_is_not_an_error(tmp_path):
+    """Any video can be passed to --source, and most have no sidecar."""
+    clip = tmp_path / "somebody_elses.mp4"
+    clip.write_bytes(b"x")
+    assert track.read_source_record(clip) is None
+
+
+# --- device resolution ------------------------------------------------------ #
+
+
+def _names(index):
+    return {0: "NVIDIA GeForce RTX 2070 with Max-Q Design", 1: "NVIDIA A100"}[index]
+
+
+def test_cpu_is_not_filed_under_a_gpu_that_happens_to_exist():
+    """The report recorded get_device_name(0) whenever CUDA was merely
+    *available*, so `--device cpu` on a machine with a GPU filed a CPU run
+    under an RTX 2070 - a latency figure attributed to hardware that did not
+    produce it, in a file whose purpose is to make the numbers checkable."""
+    assert track.resolve_device("cpu", True, _names) == ("cpu", None)
+
+
+def test_the_second_card_is_recorded_as_the_second_card():
+    """`--device 1` recorded card 0's name."""
+    assert track.resolve_device("1", True, _names) == ("cuda:1", "NVIDIA A100")
+    assert track.resolve_device("cuda:1", True, _names) == ("cuda:1", "NVIDIA A100")
+
+
+def test_the_default_device_resolves_to_the_first_card():
+    for requested in ("0", "cuda:0", "cuda", ""):
+        assert track.resolve_device(requested, True, _names) == (
+            "cuda:0",
+            "NVIDIA GeForce RTX 2070 with Max-Q Design",
+        )
+
+
+def test_a_cuda_request_with_no_cuda_records_the_cpu_that_actually_ran():
+    """Ultralytics falls back to the CPU, and the CPU is where the numbers came
+    from, so that is what the report has to say."""
+    assert track.resolve_device("0", False, _names) == ("cpu", None)
+    assert track.resolve_device("cpu", False, _names) == ("cpu", None)
+
+
+def test_a_card_that_cannot_be_named_is_not_guessed_at():
+    """Guessing card 0 is exactly how this went wrong. The device is still
+    recorded; the name is left null."""
+
+    def out_of_range(index):
+        raise RuntimeError("invalid device ordinal")
+
+    assert track.resolve_device("7", True, out_of_range) == ("cuda:7", None)

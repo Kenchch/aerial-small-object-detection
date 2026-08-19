@@ -73,6 +73,50 @@ def _sha256(path: Path) -> str | None:
     return h.hexdigest()
 
 
+def resolve_device(
+    requested, cuda_available: bool, device_name
+) -> tuple[str, str | None]:
+    """Work out what actually ran, and which GPU it was.
+
+    Returns (device_resolved, gpu_name_or_None).
+
+    The report used to record `torch.cuda.get_device_name(0)` whenever CUDA was
+    merely *available*. On a machine with a GPU, `--device cpu` therefore filed
+    a CPU run under an RTX 2070, and `--device 1` filed it under card 0. Both
+    are latency figures attributed to hardware that did not produce them, in a
+    file whose whole purpose is to make the numbers checkable.
+
+    Pure, and given its lookups, so it is testable for cpu / gpu 0 / gpu 1
+    without any of those actually being present - which is the environment CI
+    runs in.
+    """
+    text = "" if requested is None else str(requested).strip().lower()
+
+    if text in ("cpu", "mps"):  # named, non-CUDA
+        return text, None
+
+    if not cuda_available:
+        # A CUDA index was asked for and there is no CUDA. Ultralytics falls
+        # back to the CPU, and the CPU is what the numbers came off.
+        return "cpu", None
+
+    if text in ("", "cuda"):  # auto / unindexed
+        index = 0
+    else:
+        digits = text.split(":")[-1].split(",")[0]
+        if not digits.isdigit():
+            return text or "cpu", None
+        index = int(digits)
+
+    try:
+        return f"cuda:{index}", device_name(index)
+    except (AssertionError, IndexError, RuntimeError, ValueError):
+        # Index out of range, or a driver that will not answer. The device the
+        # run asked for is still worth recording; the card's name is not
+        # knowable, and guessing card 0 is how this went wrong before.
+        return f"cuda:{index}", None
+
+
 def _environment(device: str) -> dict:
     """What a latency figure needs beside it to mean anything.
 
@@ -89,12 +133,17 @@ def _environment(device: str) -> dict:
     import cv2
     import torch
 
+    resolved, gpu = resolve_device(
+        device, torch.cuda.is_available(), torch.cuda.get_device_name
+    )
     env = {
-        "device": device,
+        "device_requested": device,
+        # What the run was actually on, which is not always what was asked for.
+        "device_resolved": resolved,
         "opencv": cv2.__version__,
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "gpu": gpu,
     }
     try:
         env["ultralytics"] = version("ultralytics")
@@ -114,21 +163,61 @@ def _source_provenance(source: Path) -> dict:
     this embeds it, so the profile carries the identity of what it profiled.
     """
     info = {"path": _for_report(source), "sha256": _sha256(source)}
-    stamp = source.with_suffix(".provenance.json")
-    if stamp.is_file():
-        try:
-            recorded = json.loads(stamp.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return info
+    recorded = read_source_record(source)
+    if recorded is not None:
         # Named so a mismatch is visible rather than assumed away: the stamp
         # describes the clip it was written for, which is not necessarily the
         # file sitting there now.
-        info["generator"] = recorded.get("generator")
-        recorded_clip = recorded.get("clip", {})
-        info["matches_generator_record"] = recorded_clip.get("sha256") == info["sha256"]
-        info["fps"] = recorded_clip.get("fps")
-        info["generated_frames"] = recorded_clip.get("frames")
+        info["generator"] = recorded["generator"]
+        clip = recorded["clip"]
+        info["matches_generator_record"] = clip.get("sha256") == info["sha256"]
+        info["fps"] = clip.get("fps")
+        info["generated_frames"] = clip.get("frames")
     return info
+
+
+def read_source_record(source: Path) -> dict | None:
+    """Read and CHECK the clip's provenance sidecar, or None if there is none.
+
+    Called before the model loads, not when the report is written. Only a JSON
+    parse failure was handled: a file that parsed but was a list, or was an
+    object with `clip` set to a string, raised AttributeError from inside the
+    report builder - after ninety frames of inference had already been run.
+    Ninety frames is a minute of GPU time to be told the sidecar is malformed.
+
+    A malformed sidecar is refused rather than ignored. Silently dropping it
+    would produce a report that looks provenance-free and is actually
+    provenance-broken, and those need different fixes.
+    """
+    stamp = source.with_suffix(".provenance.json")
+    if not stamp.is_file():
+        return None
+    try:
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{stamp} is not readable JSON: {exc}") from exc
+
+    def obj(value, what):
+        # ValueError, not TypeError: the file's CONTENT is wrong, which is a
+        # data problem the message can tell the user how to fix, not a
+        # programming error in the caller.
+        if not isinstance(value, dict):
+            raise ValueError(  # noqa: TRY004
+                f"{stamp}: {what} must be a JSON object, got "
+                f"{type(value).__name__}. Regenerate it with "
+                f"src/make_demo_clip.py, or delete it to run without provenance."
+            )
+        return value
+
+    obj(recorded, "the top level")
+    for key in ("clip", "generator"):
+        if key not in recorded:
+            raise ValueError(
+                f'{stamp}: missing "{key}". Regenerate it with '
+                f"src/make_demo_clip.py, or delete it to run without provenance."
+            )
+        obj(recorded[key], f'"{key}"')
+    return recorded
 
 
 def _for_report(path: Path) -> str:
@@ -281,6 +370,13 @@ def main() -> None:
             f"truncates its target on open, so this would destroy the input "
             f"mid-read. Pass a different --out, or --no-write to profile only."
         )
+
+    # Read and check the clip's provenance sidecar HERE - before the model is
+    # loaded and long before the frame loop. Validating it where the report is
+    # written meant a malformed sidecar surfaced after every frame had already
+    # been inferred, which is a minute of GPU time to be told a 2 KB JSON file
+    # is the wrong shape.
+    read_source_record(args.source)
 
     import cv2
     from ultralytics import YOLO
