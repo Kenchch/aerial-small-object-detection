@@ -5,6 +5,8 @@ so importing this module needs neither. track_colour does still call into
 numpy, which is the one dependency guarded below.
 """
 
+import json
+
 import pytest
 
 pytest.importorskip("numpy", reason="track_colour draws from numpy's RNG")
@@ -66,3 +68,62 @@ def test_report_paths_are_repo_relative_and_posix():
     inside = track.PROJECT_ROOT / "reports" / "track_out.mp4"
     assert track._for_report(inside) == "reports/track_out.mp4"
     assert chr(92) not in track._for_report(inside)
+
+
+# --- source provenance ------------------------------------------------------ #
+
+
+def test_a_clip_with_a_generator_record_is_identified_by_it(tmp_path):
+    """reports/demo_pan.mp4 is build output and is not in the repo, so "re-run
+    make_demo_clip.py" does not by itself reproduce the clip a number was
+    measured on - the source frame is picked by label count against whatever
+    dataset revision is installed, and the crop, pan and fps are arguments.
+
+    The clip therefore identifies itself, and the profile embeds that record.
+    """
+    clip = tmp_path / "demo_pan.mp4"
+    clip.write_bytes(b"pretend this is an mp4")
+    digest = track._sha256(clip)
+    (tmp_path / "demo_pan.provenance.json").write_text(
+        json.dumps(
+            {
+                "clip": {"sha256": digest, "fps": 15, "frames": 90},
+                "generator": {"source_image": "0000295.jpg", "crop_fraction": 0.62},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    info = track._source_provenance(clip)
+    assert info["sha256"] == digest
+    assert info["generator"]["source_image"] == "0000295.jpg"
+    assert info["matches_generator_record"] is True
+    assert (info["fps"], info["generated_frames"]) == (15, 90)
+
+
+def test_a_clip_that_is_not_the_one_the_record_describes_says_so(tmp_path):
+    """A stale record beside a regenerated clip is the failure this guards
+    against, so the mismatch is reported rather than assumed away."""
+    clip = tmp_path / "demo_pan.mp4"
+    clip.write_bytes(b"a different clip entirely")
+    (tmp_path / "demo_pan.provenance.json").write_text(
+        json.dumps({"clip": {"sha256": "0" * 64}, "generator": {}}), encoding="utf-8"
+    )
+    assert track._source_provenance(clip)["matches_generator_record"] is False
+
+
+def test_a_clip_with_no_record_still_carries_its_digest(tmp_path):
+    """Any video can be passed to --source. Without a generator record the
+    profile still says exactly which bytes it profiled."""
+    clip = tmp_path / "somebody_elses.mp4"
+    clip.write_bytes(b"x")
+    info = track._source_provenance(clip)
+    assert info["sha256"] == track._sha256(clip)
+    assert "generator" not in info
+
+
+def test_an_unreadable_record_does_not_take_the_run_down(tmp_path):
+    clip = tmp_path / "demo_pan.mp4"
+    clip.write_bytes(b"x")
+    (tmp_path / "demo_pan.provenance.json").write_text("{not json", encoding="utf-8")
+    assert track._source_provenance(clip)["sha256"] == track._sha256(clip)

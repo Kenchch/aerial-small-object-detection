@@ -34,6 +34,8 @@ Usage
 """
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 
 # cv2/numpy/ultralytics are imported inside the functions that use them, after
@@ -41,6 +43,21 @@ from pathlib import Path
 # environment, which makes the CLI undiscoverable exactly when someone is
 # trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def sha256(path: Path) -> str:
+    """Digest a file in chunks - the source frames are a few MB, the clip more."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def provenance_path(out: Path) -> Path:
+    """Where this clip's provenance sits. Named from the clip, so the pair
+    cannot drift apart, and so track.py can find it without being told."""
+    return out.with_suffix(".provenance.json")
 
 
 def densest_val_image() -> tuple[Path, int]:
@@ -85,6 +102,8 @@ def main() -> None:
 
     src_path, n_obj = densest_val_image()
     img = cv2.imread(str(src_path))
+    if img is None:
+        raise SystemExit(f"cannot decode {src_path}")
     H, W = img.shape[:2]
     print(f"source : {src_path.name}  ({W}x{H}, {n_obj} labelled objects)")
 
@@ -118,7 +137,57 @@ def main() -> None:
         writer.write(crop[:oh, :ow])
 
     writer.release()
+
+    # The clip is not in the repo - it is 6.5 MB of build output - so "re-run
+    # make_demo_clip.py" is not by itself a way to get the same clip back.
+    # densest_val_image() picks by label count, which depends on which dataset
+    # revision is on the machine, and the crop, pan and fps are all arguments.
+    # Without this file, a tracking number measured on one clip and a clip
+    # regenerated later are two different things that look identical.
+    #
+    # track.py embeds this into reports/tracking.json, so the profile carries
+    # the identity of the footage it profiled.
+    provenance = {
+        "clip": {
+            "path": args.out.name,
+            "sha256": sha256(args.out),
+            "frames": args.frames,
+            "fps": args.fps,
+            "width": ow,
+            "height": oh,
+        },
+        "generator": {
+            "script": "src/make_demo_clip.py",
+            "source_image": src_path.name,
+            "source_sha256": sha256(src_path),
+            "source_size": [W, H],
+            "source_labelled_objects": n_obj,
+            "selection": "densest val frame by labelled object count",
+            # The dataset's NAME and size, not its path. This file is
+            # committed, and where the dataset happens to sit on one machine is
+            # not reproducibility information - it is someone's drive letter.
+            # The val-split image count is the version signal that matters:
+            # the frame is chosen by scanning that split, so a different count
+            # means a different selection is possible.
+            "dataset": src_path.parent.parent.parent.name,
+            "dataset_val_images": len(list(src_path.parent.glob("*.jpg"))),
+            "crop_fraction": args.crop,
+            "crop_size": [cw, ch],
+            "pan": {
+                "horizontal": "ease-in-out, 0 -> W-cw, one pass",
+                "vertical": "raised cosine, one full sweep, 0 -> H-ch -> 0",
+                "max_dx": max_dx,
+                "max_dy": max_dy,
+            },
+        },
+        "opencv": cv2.__version__,
+    }
+    provenance_path(args.out).write_text(
+        json.dumps(provenance, indent=2), encoding="utf-8"
+    )
+
     print(f"wrote  : {args.out}  ({args.frames} frames @ {args.fps} fps, {ow}x{oh})")
+    print(f"         {provenance_path(args.out).name}")
     print(
         "\nNOTE: synthetic camera motion over a real frame. Validates the "
         "pipeline;\n      it is not a tracking accuracy benchmark. See module "

@@ -255,27 +255,27 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.81 ms | 1.1 ms |
-| detect + track | 31.83 ms | **96.27 ms** |
-| ├ preprocess | 4.66 ms | |
-| ├ forward | 13.11 ms | |
-| ├ postprocess (NMS) | 1.78 ms | |
-| └ association + overhead | 11.82 ms | |
-| annotate | 3.03 ms | 3.87 ms |
-| encode | 2.5 ms | 2.73 ms |
-| open + flush (once per run) | | 1.291 ms |
-| **accounted** | | **105.25 ms** |
-| **wall per frame** | | **105.33 ms** |
+| decode | 0.78 ms | 0.93 ms |
+| detect + track | 31.19 ms | **93.51 ms** |
+| ├ preprocess | 4.52 ms | |
+| ├ forward | 12.83 ms | |
+| ├ postprocess (NMS) | 1.68 ms | |
+| └ association + overhead | 11.2 ms | |
+| annotate | 2.92 ms | 3.51 ms |
+| encode | 2.31 ms | 2.44 ms |
+| open + flush (once per run) | | 0.094 ms |
+| **accounted** | | **100.48 ms** |
+| **wall per frame** | | **100.55 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 31.37 against 31.83 here. That is the honest form: the frame
+parent median — 30.23 against 31.19 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
-**`detect + track` (31.83 ms) is not the same measurement as the 11.74 ms
-PyTorch core row in the backend table above, and the 20.09 ms between them is the
+**`detect + track` (31.19 ms) is not the same measurement as the 11.74 ms
+PyTorch core row in the backend table above, and the 19.45 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -286,24 +286,24 @@ reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
 **The forward pass is 41 % of this stage. Preprocessing and association are
-another 52 %,** and neither is affected by the export format. That is the
+another 50 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.47 ms on the forward pass, while 18.72 ms per frame sits in the
+buys 2.47 ms on the forward pass, while 18.36 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.74 → 13.11 ms difference on the forward pass itself is
+The remaining 11.74 → 12.83 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,622 ms — 177× the steady-state 31.83 ms**, from CUDA context
+frame costs **5,586 ms — 179× the steady-state 31.19 ms**, from CUDA context
 creation and cuDNN autotuning. Amortised over 90 frames that is most of the
-gap between the mean (96.27 ms) and the median (31.83 ms), which is why this
-clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
+gap between the mean (93.51 ms) and the median (31.19 ms), which is why this
+clip's end-to-end throughput (**9.9 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.17 ms/frame → 26.2 FPS**, not the ~31 FPS a detect+track-only
+— which gives **37.20 ms/frame → 26.9 FPS**, not the ~32 FPS a detect+track-only
 figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
@@ -502,8 +502,12 @@ The dataset is mounted at `/data`, and the image carries
 into the container's ephemeral filesystem on every run and fail outright
 offline.
 
-`.dockerignore` keeps the build context to `src/` and `requirements.txt`.
-Without it `COPY . .` shipped 60 MB from this checkout — 33 MB of `runs/`
+The Dockerfile copies exactly what the image needs — `src/`, `requirements.txt`
+and `docker/VisDrone.yaml` — and `.dockerignore` keeps local data, weights, git
+history and build output out of the context uploaded to the daemon. (The
+context still carries the README, tests and docs; they are small, and the
+explicit `COPY` lines are what decide the image's contents.) Without the ignore
+file, `COPY . .` shipped 60 MB from this checkout — 33 MB of `runs/`
 (including 21.6 MB of weights that `.gitignore` excludes from git and Docker
 sends anyway, since `.gitignore` does not apply to a build context), 21 MB of
 `.git`, and the demo video. CI builds the image on every push and checks that
@@ -521,7 +525,18 @@ curl -L -o runs/n_1024/weights/best.pt \
 ```
 
 5.2 MB, sha256 `8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e`.
-Every number in this README is reproducible from it.
+
+The accuracy and latency numbers are reproducible from this checkpoint plus the
+VisDrone val split plus a comparable environment — `reports/benchmark.json`
+records the GPU, the driver, the library versions and the export manifest they
+were measured with. The *tracking* numbers additionally depend on the demo clip,
+which is build output and is not in the repo: `src/make_demo_clip.py` picks its
+source frame by label count against whatever dataset revision is installed, and
+the crop, pan and fps are arguments. So the clip identifies itself instead —
+`reports/demo_pan.provenance.json` records the source frame and its sha256, the
+crop and the pan, and the clip's own digest, and `reports/tracking.json` embeds
+all of it under `source`, with `matches_generator_record` saying whether the
+file profiled is the file that record describes.
 
 ```bash
 # Train (1024px, chosen from the label-size distribution above).
@@ -578,9 +593,12 @@ guarding:
   directory rather than naming files, so a new script is covered the moment it
   is added.
 
-The remaining tests cover the pure helpers — `_summarise`'s p95 indexing and
-`track_colour`'s determinism — which is most of what can be tested without a
-GPU and a 35 GB dataset.
+The rest drive the pure functions: the export cache's manifest, the CUDA
+placement gate, frame ordering, the source/output collision guard, the clip's
+provenance record, the metric helpers and the report-path formatting.
+Deliberately not enumerated exhaustively — a list in a README goes stale the
+moment a test is added, and this one had. `pytest -q --collect-only` is the
+current answer.
 
 `reports/tracking_demo.gif` was made by hand from `reports/track_out.mp4`
 (ffmpeg) and has no script in the repo; `src/track.py --source

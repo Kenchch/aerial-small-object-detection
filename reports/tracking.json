@@ -1,39 +1,39 @@
 {
   "frames": 90,
-  "wall_s": 9.48,
-  "end_to_end_fps": 9.5,
-  "per_frame_wall_ms": 105.33,
+  "wall_s": 9.05,
+  "end_to_end_fps": 9.9,
+  "per_frame_wall_ms": 100.55,
   "stage_ms_median": {
-    "decode": 0.81,
-    "detect_and_track": 31.83,
-    "annotate": 3.03,
-    "encode": 2.5
+    "decode": 0.78,
+    "detect_and_track": 31.19,
+    "annotate": 2.92,
+    "encode": 2.31
   },
   "open_and_flush_ms": {
-    "setup": 114.75,
-    "flush": 1.48,
-    "amortised_per_frame": 1.291
+    "setup": 7.55,
+    "flush": 0.88,
+    "amortised_per_frame": 0.094
   },
   "stage_ms_mean": {
-    "decode": 1.1,
-    "detect_and_track": 96.27,
-    "annotate": 3.87,
-    "encode": 2.73
+    "decode": 0.93,
+    "detect_and_track": 93.51,
+    "annotate": 3.51,
+    "encode": 2.44
   },
   "detect_and_track_ms_median": {
-    "preprocess": 4.66,
-    "forward": 13.11,
-    "postprocess_nms": 1.78,
-    "association_and_overhead": 11.82
+    "preprocess": 4.52,
+    "forward": 12.83,
+    "postprocess_nms": 1.68,
+    "association_and_overhead": 11.2
   },
   "warmup": {
-    "first_frame_ms": 5621.6,
-    "steady_state_ms": 31.83,
-    "warmup_penalty_x": 176.6
+    "first_frame_ms": 5586.2,
+    "steady_state_ms": 31.19,
+    "warmup_penalty_x": 179.1
   },
   "reconciliation": {
-    "accounted_mean_ms": 105.25,
-    "unaccounted_ms": 0.08,
+    "accounted_mean_ms": 100.48,
+    "unaccounted_ms": 0.07,
     "coverage_pct": 99.9
   },
   "tracks": {
@@ -48,11 +48,48 @@
   },
   "config": {
     "weights": "runs/n_1024/weights/best.pt",
-    "source": "reports/demo_pan.mp4",
     "out": "reports/track_out.mp4",
     "imgsz": 1024,
     "conf": 0.25,
-    "tracker": "bytetrack.yaml",
-    "device": "0"
+    "tracker": "bytetrack.yaml"
+  },
+  "environment": {
+    "device": "0",
+    "opencv": "5.0.0",
+    "torch": "2.6.0+cu124",
+    "cuda": "12.4",
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "ultralytics": "8.4.110"
+  },
+  "source": {
+    "path": "reports/demo_pan.mp4",
+    "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
+    "generator": {
+      "script": "src/make_demo_clip.py",
+      "source_image": "0000295_02400_d_0000033.jpg",
+      "source_sha256": "f4e6fc5838b411648e0d10845540309874c23bd79a402d6be68bf57cbedf6771",
+      "source_size": [
+        1360,
+        765
+      ],
+      "source_labelled_objects": 317,
+      "selection": "densest val frame by labelled object count",
+      "dataset": "VisDrone",
+      "dataset_val_images": 548,
+      "crop_fraction": 0.62,
+      "crop_size": [
+        843,
+        474
+      ],
+      "pan": {
+        "horizontal": "ease-in-out, 0 -> W-cw, one pass",
+        "vertical": "raised cosine, one full sweep, 0 -> H-ch -> 0",
+        "max_dx": 517,
+        "max_dy": 291
+      }
+    },
+    "matches_generator_record": true,
+    "fps": 15,
+    "generated_frames": 90
   }
 }

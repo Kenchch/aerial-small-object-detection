@@ -1,0 +1,35 @@
+{
+  "clip": {
+    "path": "demo_pan.mp4",
+    "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
+    "frames": 90,
+    "fps": 15,
+    "width": 842,
+    "height": 474
+  },
+  "generator": {
+    "script": "src/make_demo_clip.py",
+    "source_image": "0000295_02400_d_0000033.jpg",
+    "source_sha256": "f4e6fc5838b411648e0d10845540309874c23bd79a402d6be68bf57cbedf6771",
+    "source_size": [
+      1360,
+      765
+    ],
+    "source_labelled_objects": 317,
+    "selection": "densest val frame by labelled object count",
+    "dataset": "VisDrone",
+    "dataset_val_images": 548,
+    "crop_fraction": 0.62,
+    "crop_size": [
+      843,
+      474
+    ],
+    "pan": {
+      "horizontal": "ease-in-out, 0 -> W-cw, one pass",
+      "vertical": "raised cosine, one full sweep, 0 -> H-ch -> 0",
+      "max_dx": 517,
+      "max_dy": 291
+    }
+  },
+  "opencv": "5.0.0"
+}
