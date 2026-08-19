@@ -19,6 +19,7 @@ Usage
 """
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -59,6 +60,75 @@ def track_colour(track_id: int) -> tuple:
     rng = np.random.default_rng(int(track_id) * 9973)
     c = rng.integers(70, 255, size=3)
     return int(c[0]), int(c[1]), int(c[2])
+
+
+def _sha256(path: Path) -> str | None:
+    """Digest a file, or None if it is not one (an image-sequence directory)."""
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _environment(device: str) -> dict:
+    """What a latency figure needs beside it to mean anything.
+
+    Milliseconds without the GPU and the library versions are a number nobody
+    can reproduce or compare against their own machine - and this report is
+    published as evidence. benchmark.py has recorded this since it existed;
+    the tracking profile did not, so its numbers named a device ("0") and
+    nothing about what that device was.
+    """
+    # importlib.metadata rather than importing ultralytics for its __version__:
+    # this has to be computable in any environment the report is written from.
+    from importlib.metadata import PackageNotFoundError, version
+
+    import cv2
+    import torch
+
+    env = {
+        "device": device,
+        "opencv": cv2.__version__,
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    }
+    try:
+        env["ultralytics"] = version("ultralytics")
+    except PackageNotFoundError:  # pragma: no cover - unreachable from track.py
+        env["ultralytics"] = None
+    return env
+
+
+def _source_provenance(source: Path) -> dict:
+    """Identify the footage, and carry its generator's record if there is one.
+
+    reports/demo_pan.mp4 is build output and is not in the repo, so "re-run
+    make_demo_clip.py" does not by itself reproduce the clip a number was
+    measured on: the source frame is chosen by label count against whatever
+    dataset revision is installed, and the crop, pan and fps are arguments.
+    make_demo_clip.py now writes <clip>.provenance.json beside the clip, and
+    this embeds it, so the profile carries the identity of what it profiled.
+    """
+    info = {"path": _for_report(source), "sha256": _sha256(source)}
+    stamp = source.with_suffix(".provenance.json")
+    if stamp.is_file():
+        try:
+            recorded = json.loads(stamp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return info
+        # Named so a mismatch is visible rather than assumed away: the stamp
+        # describes the clip it was written for, which is not necessarily the
+        # file sitting there now.
+        info["generator"] = recorded.get("generator")
+        recorded_clip = recorded.get("clip", {})
+        info["matches_generator_record"] = recorded_clip.get("sha256") == info["sha256"]
+        info["fps"] = recorded_clip.get("fps")
+        info["generated_frames"] = recorded_clip.get("frames")
+    return info
 
 
 def _for_report(path: Path) -> str:
@@ -145,13 +215,19 @@ def frame_source(source: Path):
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        yield None, fps, (w, h)
-        while True:
-            ok, img = cap.read()
-            if not ok:
-                break
-            yield img, None, None
-        cap.release()
+        # try/finally: close() on a generator raises GeneratorExit at the
+        # yield, so a release placed after the loop is skipped whenever the
+        # consumer stops early - which is exactly what happens when a frame
+        # fails and track.py unwinds.
+        try:
+            yield None, fps, (w, h)
+            while True:
+                ok, img = cap.read()
+                if not ok:
+                    break
+                yield img, None, None
+        finally:
+            cap.release()
 
 
 def main() -> None:
@@ -255,84 +331,110 @@ def main() -> None:
     # Decode has to be timed too. Leaving it out was how the first version of
     # this profile accounted for only a third of wall-clock time.
     t_decode_start = time.perf_counter()
-    for frame, _, _ in src:
-        t_decode.append((time.perf_counter() - t_decode_start) * 1000)
-        n_frames += 1
+    # try/finally, because the reader and the writer are OS handles.
+    # A failure inside the loop - a CUDA OOM on one frame, a draw against a
+    # malformed box - used to propagate straight out of main(), leaving the
+    # capture and the VideoWriter to whenever the interpreter got round to
+    # them. On Windows that leaves the output file locked, so the obvious
+    # next step (re-run, or delete the half-written mp4) fails for a second,
+    # unrelated-looking reason.
+    #
+    # The release still happens INSIDE the wall clock on the success path;
+    # the finally block only covers the case where there is no report to
+    # write anyway.
+    released = False
+    flush_ms = 0.0
+    try:
+        for frame, _, _ in src:
+            t_decode.append((time.perf_counter() - t_decode_start) * 1000)
+            n_frames += 1
 
-        t0 = time.perf_counter()
-        # persist=True carries tracker state across calls; without it every frame
-        # is treated as a new sequence and ids restart from 1.
-        res = model.track(
-            frame,
-            imgsz=args.imgsz,
-            conf=args.conf,
-            device=args.device,
-            tracker=args.tracker,
-            persist=True,
-            verbose=False,
-        )[0]
-        t_infer.append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            # persist=True carries tracker state across calls; without it every frame
+            # is treated as a new sequence and ids restart from 1.
+            res = model.track(
+                frame,
+                imgsz=args.imgsz,
+                conf=args.conf,
+                device=args.device,
+                tracker=args.tracker,
+                persist=True,
+                verbose=False,
+            )[0]
+            t_infer.append((time.perf_counter() - t0) * 1000)
 
-        # preprocess = letterbox + BGR->RGB + /255 + HWC->CHW + host-to-device;
-        # postprocess = NMS and box rescaling. Association is deliberately not
-        # in here -- Ultralytics runs the tracker after postprocess, so it
-        # falls out below as the remainder against the wall-clock t_infer.
-        speed = res.speed
-        t_pre.append(speed["preprocess"])
-        t_fwd.append(speed["inference"])
-        t_post.append(speed["postprocess"])
+            # preprocess = letterbox + BGR->RGB + /255 + HWC->CHW + host-to-device;
+            # postprocess = NMS and box rescaling. Association is deliberately not
+            # in here -- Ultralytics runs the tracker after postprocess, so it
+            # falls out below as the remainder against the wall-clock t_infer.
+            speed = res.speed
+            t_pre.append(speed["preprocess"])
+            t_fwd.append(speed["inference"])
+            t_post.append(speed["postprocess"])
 
-        t0 = time.perf_counter()
-        boxes = res.boxes
-        if boxes is not None and boxes.id is not None:
-            xyxy = boxes.xyxy.cpu().numpy()
-            ids = boxes.id.cpu().numpy().astype(int)
-            clss = boxes.cls.cpu().numpy().astype(int)
-            # strict=True: these three come off the same Boxes object and must
-            # be the same length. Silently truncating to the shortest would
-            # drop detections from the profile rather than report the problem.
-            for (x1, y1, x2, y2), tid, cid in zip(xyxy, ids, clss, strict=True):
-                track_frames[tid] += 1
-                colour = track_colour(tid)
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
-                label = f"{model.names[cid]} {tid}"
-                (tw, th), _ = cv2.getTextSize(label, font, 0.4, 1)
-                cv2.rectangle(
-                    frame,
-                    (int(x1), int(y1) - th - 4),
-                    (int(x1) + tw + 4, int(y1)),
-                    colour,
-                    -1,
-                )
-                cv2.putText(
-                    frame,
-                    label,
-                    (int(x1) + 2, int(y1) - 3),
-                    font,
-                    0.4,
-                    (0, 0, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
-        t_draw.append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            boxes = res.boxes
+            if boxes is not None and boxes.id is not None:
+                xyxy = boxes.xyxy.cpu().numpy()
+                ids = boxes.id.cpu().numpy().astype(int)
+                clss = boxes.cls.cpu().numpy().astype(int)
+                # strict=True: these three come off the same Boxes object and must
+                # be the same length. Silently truncating to the shortest would
+                # drop detections from the profile rather than report the problem.
+                for (x1, y1, x2, y2), tid, cid in zip(xyxy, ids, clss, strict=True):
+                    track_frames[tid] += 1
+                    colour = track_colour(tid)
+                    cv2.rectangle(
+                        frame, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2
+                    )
+                    label = f"{model.names[cid]} {tid}"
+                    (tw, th), _ = cv2.getTextSize(label, font, 0.4, 1)
+                    cv2.rectangle(
+                        frame,
+                        (int(x1), int(y1) - th - 4),
+                        (int(x1) + tw + 4, int(y1)),
+                        colour,
+                        -1,
+                    )
+                    cv2.putText(
+                        frame,
+                        label,
+                        (int(x1) + 2, int(y1) - 3),
+                        font,
+                        0.4,
+                        (0, 0, 0),
+                        1,
+                        cv2.LINE_AA,
+                    )
+            t_draw.append((time.perf_counter() - t0) * 1000)
 
+            if writer is not None:
+                t0 = time.perf_counter()
+                writer.write(frame)
+                t_write.append((time.perf_counter() - t0) * 1000)
+
+            t_decode_start = time.perf_counter()
+
+        # release() before the clock stops. It finalises the container -
+        # flushing buffered frames and writing the moov atom - which is real
+        # encode work, and on a long clip it is not a rounding error. Stopping
+        # the timer first was how "encode" could look cheap in a report whose
+        # own wall time did not contain the expensive half of it.
         if writer is not None:
             t0 = time.perf_counter()
-            writer.write(frame)
-            t_write.append((time.perf_counter() - t0) * 1000)
+            writer.release()
+            flush_ms = (time.perf_counter() - t0) * 1000
+        src.close()
+        released = True
+    finally:
+        if not released:
+            # The failure path. Nothing is timed here - there will be no report
+            # - the point is only that the handles do not outlive the process's
+            # last use of them.
+            src.close()
+            if writer is not None:
+                writer.release()
 
-        t_decode_start = time.perf_counter()
-
-    # release() before the clock stops. It finalises the container - flushing
-    # buffered frames and writing the moov atom - which is real encode work,
-    # and on a long clip it is not a rounding error. Stopping the timer first
-    # was how "encode" could look cheap in a report whose own wall time did not
-    # contain the expensive half of it.
-    flush_ms = 0.0
-    if writer is not None:
-        t0 = time.perf_counter()
-        writer.release()
-        flush_ms = (time.perf_counter() - t0) * 1000
     wall = time.perf_counter() - wall_start
 
     if not n_frames:
@@ -466,17 +568,18 @@ def main() -> None:
         },
         "config": {
             "weights": _for_report(args.weights),
-            "source": _for_report(args.source),
-            # None rather than a path when nothing was written, so the report
-            # cannot name an output file that does not exist.
+            # None rather than a path when nothing was written, so the
+            # report cannot name an output file that does not exist.
             "out": None if args.no_write else _for_report(args.out),
             "imgsz": args.imgsz,
             "conf": args.conf,
             "tracker": args.tracker,
-            # Every latency figure in this file is a property of the device it
-            # ran on, and the report did not say which one that was.
-            "device": args.device,
         },
+        # Every latency figure in this file is a property of the machine it ran
+        # on and the footage it ran over. Both are recorded, so the numbers can
+        # be checked rather than taken on trust.
+        "environment": _environment(args.device),
+        "source": _source_provenance(args.source),
     }
 
     print(f"\n{'=' * 60}")
