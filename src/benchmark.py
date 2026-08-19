@@ -26,6 +26,7 @@ Usage
 import argparse
 import json
 import math
+import shutil
 import statistics
 import time
 from pathlib import Path
@@ -252,6 +253,47 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def export_onnx(weights: Path, onnx_path: Path, imgsz: int, exporter=None) -> None:
+    """Export `weights` to `onnx_path`, writing nothing into the weights dir.
+
+    Ultralytics writes the .onnx next to the .pt it loaded - verified: exporting
+    a checkpoint from a temp directory put probe.onnx in that same directory. So
+    exporting straight from a read-only mount fails even when the final
+    destination is writable, which is what `docker run -v ...:/weights:ro` does
+    on the very first run, when no cached graph exists yet. The checkpoint is
+    copied into the destination directory and exported from there instead.
+
+    `exporter` is injected so the path can be tested without a GPU, a
+    checkpoint, or ultralytics installed at all.
+    """
+    onnx_path.parent.mkdir(parents=True, exist_ok=True)
+    staged_weights = onnx_path.parent / weights.name
+    copied = not staged_weights.exists() or not staged_weights.samefile(weights)
+    if copied:
+        shutil.copy2(weights, staged_weights)
+    try:
+        if exporter is None:  # pragma: no cover - exercised by the real run
+            from ultralytics import YOLO
+
+            def exporter(src: Path) -> str:
+                return YOLO(str(src)).export(
+                    format="onnx",
+                    imgsz=imgsz,
+                    opset=ONNX_OPSET,
+                    simplify=True,  # onnxslim folds constants; smaller, faster to load
+                    dynamic=False,  # static shapes let ORT pick better kernels
+                )
+
+        produced = Path(exporter(staged_weights))
+        # .replace, not .rename: rename refuses an existing target on Windows,
+        # and a digest mismatch forcing a re-export is exactly the case where
+        # the stale graph has to be overwritten.
+        produced.replace(onnx_path)
+    finally:
+        if copied:
+            staged_weights.unlink(missing_ok=True)
+
+
 def _MANIFEST_STAMP(onnx_path: Path) -> Path:
     """The one place the stamp's filename is decided.
 
@@ -315,7 +357,12 @@ def _export_is_current(onnx_path: Path, weights: Path, imgsz: int) -> bool:
 
 
 def run_one(
-    weights: Path, imgsz: int, data: str, device: str = "0", map_tolerance: float = 0.01
+    weights: Path,
+    imgsz: int,
+    data: str,
+    device: str = "0",
+    map_tolerance: float = 0.01,
+    cache_dir: Path | None = None,
 ) -> dict:
     """Accuracy + latency across every available backend."""
     import torch
@@ -347,20 +394,13 @@ def run_one(
     # after best.pt at the same imgsz finds best_<imgsz>.onnx already on disk,
     # skips export, and silently benchmarks best.pt's latency against
     # last.pt's freshly computed accuracy in the same output row.
-    onnx_path = weights.parent / f"{weights.stem}_{imgsz}.onnx"
+    # cache_dir, not weights.parent: the export and its manifest are build
+    # artefacts, and writing them beside the checkpoint means the weights mount
+    # has to be writable. Defaults to the weights directory so a local run is
+    # unchanged.
+    onnx_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}.onnx"
     if not _export_is_current(onnx_path, weights, imgsz):
-        exported = YOLO(str(weights)).export(
-            format="onnx",
-            imgsz=imgsz,
-            opset=13,
-            simplify=True,  # onnxslim folds constants; smaller graph, faster load
-            dynamic=False,  # static shapes let ORT pick better kernels
-        )
-        # .replace, not .rename: rename refuses an existing target on Windows,
-        # which never came up while export was skipped whenever the file was
-        # there. Now that a digest mismatch forces a re-export, the stale graph
-        # is exactly what has to be overwritten.
-        Path(exported).replace(onnx_path)
+        export_onnx(weights, onnx_path, imgsz)
         # Write the SAME stamp _export_is_current() reads. It wrote
         # .onnx.sha256 while the check looked for .onnx.manifest.json, so the
         # check never found a stamp, always returned False, and every run
@@ -449,10 +489,26 @@ def main() -> None:
         help="Fail if ONNX mAP differs from PyTorch by more than "
         "this. An export is meant to change speed, not the model.",
     )
+    p.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="Where the exported .onnx and its manifest are written. "
+        "Defaults to the weights directory, which is fine locally "
+        "but fails when the weights are mounted read-only - the "
+        "container mounts /weights:ro and points this at /out.",
+    )
     p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
     args = p.parse_args()
 
-    row = run_one(args.weights, args.imgsz, args.data, args.device, args.map_tolerance)
+    row = run_one(
+        args.weights,
+        args.imgsz,
+        args.data,
+        args.device,
+        args.map_tolerance,
+        args.cache_dir,
+    )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(row, indent=2))

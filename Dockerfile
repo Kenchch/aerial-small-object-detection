@@ -55,4 +55,8 @@ VOLUME ["/weights", "/data", "/out"]
 # Override the command for anything else:
 #   docker run --gpus all -v ... aerial-detection src/track.py --weights ...
 ENTRYPOINT ["python"]
-CMD ["src/benchmark.py", "--weights", "/weights/best.pt", "--data", "docker/VisDrone.yaml", "--imgsz", "1024", "--out", "/out/benchmark.json"]
+# --cache-dir keeps the exported .onnx and its manifest out of /weights,
+# which is mounted read-only. Without it the FIRST run fails: no cached
+# graph exists yet, so it exports - and ultralytics writes the .onnx
+# beside the checkpoint it loaded.
+CMD ["src/benchmark.py", "--weights", "/weights/best.pt", "--cache-dir", "/out/onnx-cache", "--data", "docker/VisDrone.yaml", "--imgsz", "1024", "--out", "/out/benchmark.json"]
