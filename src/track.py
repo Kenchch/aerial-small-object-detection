@@ -165,15 +165,55 @@ def _source_provenance(source: Path) -> dict:
     info = {"path": _for_report(source), "sha256": _sha256(source)}
     recorded = read_source_record(source)
     if recorded is not None:
-        # Named so a mismatch is visible rather than assumed away: the stamp
-        # describes the clip it was written for, which is not necessarily the
-        # file sitting there now.
-        info["generator"] = recorded["generator"]
-        clip = recorded["clip"]
-        info["matches_generator_record"] = clip.get("sha256") == info["sha256"]
-        info["fps"] = clip.get("fps")
-        info["generated_frames"] = clip.get("frames")
+        # The WHOLE record, not a selection from it. Copying three fields
+        # across meant the report carried a summary of the provenance rather
+        # than the provenance, and which three got copied was a decision made
+        # once and never revisited - `frames_sha256` was added to the sidecar
+        # and simply never reached the report.
+        info["generator_record"] = recorded
+        info["matches_generator_record"] = (
+            recorded["clip"].get("sha256") == info["sha256"]
+        )
     return info
+
+
+def check_source_matches_record(source: Path, allow_mismatch: bool = False) -> bool:
+    """Is this the clip the provenance record describes? Checked up front.
+
+    Returns True when it matches (or when there is no record to match against),
+    False when it does not and the caller has opted into running anyway.
+
+    The comparison used to happen where the report was assembled, so a clip
+    that did not match its record was profiled in full - ninety frames, a
+    minute of GPU time - and the disagreement appeared as
+    `"matches_generator_record": false` in a file written at the end. That is a
+    fact discovered after paying for it, and a report published on the strength
+    of it is a report about footage nobody meant to measure.
+
+    Digesting the file is milliseconds; the run is a minute. There is no reason
+    for this to be the late check.
+    """
+    recorded = read_source_record(source)
+    if recorded is None:
+        return True
+    expected = recorded["clip"].get("sha256")
+    actual = _sha256(source)
+    if expected == actual:
+        return True
+    if allow_mismatch:
+        print(
+            f"[warn] {source.name} does not match its provenance record "
+            f"({actual[:16]}... vs {expected}). Continuing because "
+            f"--allow-source-mismatch was passed; the report will say so."
+        )
+        return False
+    raise SystemExit(
+        f"{source.name} has sha256 {actual}, but "
+        f"{source.with_suffix('.provenance.json').name} describes a clip with "
+        f"{expected}. This is not the footage that record is about. Regenerate "
+        f"the clip with src/make_demo_clip.py, or pass --allow-source-mismatch "
+        f"to profile it anyway."
+    )
 
 
 def read_source_record(source: Path) -> dict | None:
@@ -347,6 +387,14 @@ def main() -> None:
         "--no-write", action="store_true", help="Profile only; write no video."
     )
     p.add_argument(
+        "--allow-source-mismatch",
+        action="store_true",
+        help="Profile the source even when it disagrees with its "
+        "provenance record. Off by default: a latency figure "
+        "published against footage nobody meant to measure is a "
+        "wrong number, and the mismatch is recorded either way.",
+    )
+    p.add_argument(
         "--device",
         default="0",
         help="'0' for GPU, or 'cpu'. Matches evaluate.py and "
@@ -376,7 +424,14 @@ def main() -> None:
     # written meant a malformed sidecar surfaced after every frame had already
     # been inferred, which is a minute of GPU time to be told a 2 KB JSON file
     # is the wrong shape.
-    read_source_record(args.source)
+    #
+    # And the digest, before the model loads. Comparing it where the report was
+    # built meant a clip that did not match its record was profiled in full
+    # first, and the disagreement appeared at the end of a run that should
+    # never have started.
+    source_matches = check_source_matches_record(
+        args.source, args.allow_source_mismatch
+    )
 
     import cv2
     from ultralytics import YOLO
@@ -391,24 +446,38 @@ def main() -> None:
     # unmeasured.
     wall_start = time.perf_counter()
 
-    src = frame_source(args.source)
-    _, fps, (W, H) = next(src)
-
+    # Setup is guarded too, not just the frame loop. Both handles are opened
+    # here, and either can fail after the other is already open: an unopenable
+    # writer left the capture holding the source file, and a header read that
+    # raised left the writer holding a zero-byte output. The frame loop's
+    # try/finally starts after this, so without this block those two cases were
+    # the only ones not covered.
+    src = None
     writer = None
-    if not args.no_write:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(
-            str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)
-        )
-        # Without this check, a missing mp4v/FFmpeg codec makes write() a
-        # silent no-op: the script still exits 0 and prints a frame count,
-        # and the failure only surfaces later, in whatever reads the (empty
-        # or missing) output file -- pointing at the wrong script entirely.
-        if not writer.isOpened():
-            raise SystemExit(
-                f"cannot open VideoWriter for {args.out} "
-                f"(mp4v codec unavailable in this OpenCV build?)"
+    try:
+        src = frame_source(args.source)
+        _, fps, (W, H) = next(src)
+
+        if not args.no_write:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            writer = cv2.VideoWriter(
+                str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)
             )
+            # Without this check, a missing mp4v/FFmpeg codec makes write() a
+            # silent no-op: the script still exits 0 and prints a frame count,
+            # and the failure only surfaces later, in whatever reads the (empty
+            # or missing) output file -- pointing at the wrong script entirely.
+            if not writer.isOpened():
+                raise SystemExit(
+                    f"cannot open VideoWriter for {args.out} "
+                    f"(mp4v codec unavailable in this OpenCV build?)"
+                )
+    except BaseException:
+        if src is not None:
+            src.close()
+        if writer is not None:
+            writer.release()
+        raise
 
     # Everything before the first frame: capture open, header read, writer
     # open. Reported rather than folded into t_decode, so the per-frame stage
@@ -675,7 +744,14 @@ def main() -> None:
         # on and the footage it ran over. Both are recorded, so the numbers can
         # be checked rather than taken on trust.
         "environment": _environment(args.device),
-        "source": _source_provenance(args.source),
+        "source": {
+            **_source_provenance(args.source),
+            # False only when --allow-source-mismatch was used, since the run
+            # stops otherwise. Recorded so the report says on its face that
+            # these numbers are about footage that is not what the record
+            # describes.
+            "ran_with_mismatch": not source_matches,
+        },
     }
 
     print(f"\n{'=' * 60}")

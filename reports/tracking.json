@@ -1,39 +1,39 @@
 {
   "frames": 90,
-  "wall_s": 9.98,
-  "end_to_end_fps": 9.0,
-  "per_frame_wall_ms": 110.92,
+  "wall_s": 9.46,
+  "end_to_end_fps": 9.5,
+  "per_frame_wall_ms": 105.13,
   "stage_ms_median": {
-    "decode": 0.99,
-    "detect_and_track": 35.3,
+    "decode": 1.14,
+    "detect_and_track": 31.79,
     "annotate": 2.97,
-    "encode": 2.46
+    "encode": 2.37
   },
   "open_and_flush_ms": {
-    "setup": 7.2,
-    "flush": 1.07,
-    "amortised_per_frame": 0.092
+    "setup": 9.07,
+    "flush": 1.04,
+    "amortised_per_frame": 0.112
   },
   "stage_ms_mean": {
-    "decode": 1.15,
-    "detect_and_track": 103.44,
-    "annotate": 3.53,
-    "encode": 2.61
+    "decode": 1.25,
+    "detect_and_track": 97.84,
+    "annotate": 3.37,
+    "encode": 2.49
   },
   "detect_and_track_ms_median": {
-    "preprocess": 5.48,
-    "forward": 14.52,
-    "postprocess_nms": 1.8,
-    "association_and_overhead": 11.19
+    "preprocess": 5.82,
+    "forward": 12.36,
+    "postprocess_nms": 1.69,
+    "association_and_overhead": 11.32
   },
   "warmup": {
-    "first_frame_ms": 6263.5,
-    "steady_state_ms": 35.3,
-    "warmup_penalty_x": 177.4
+    "first_frame_ms": 5917.6,
+    "steady_state_ms": 31.79,
+    "warmup_penalty_x": 186.1
   },
   "reconciliation": {
-    "accounted_mean_ms": 110.83,
-    "unaccounted_ms": 0.09,
+    "accounted_mean_ms": 105.06,
+    "unaccounted_ms": 0.07,
     "coverage_pct": 99.9
   },
   "tracks": {
@@ -65,33 +65,44 @@
   "source": {
     "path": "reports/demo_pan.mp4",
     "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
-    "generator": {
-      "script": "src/make_demo_clip.py",
-      "source_image": "0000295_02400_d_0000033.jpg",
-      "source_sha256": "f4e6fc5838b411648e0d10845540309874c23bd79a402d6be68bf57cbedf6771",
-      "source_size": [
-        1360,
-        765
-      ],
-      "source_labelled_objects": 317,
-      "selection": "named with --source-image",
-      "dataset": "VisDrone",
-      "dataset_split": "val",
-      "dataset_split_images": 548,
-      "crop_fraction": 0.62,
-      "crop_size": [
-        843,
-        474
-      ],
-      "pan": {
-        "horizontal": "ease-in-out, 0 -> W-cw, one pass",
-        "vertical": "raised cosine, one full sweep, 0 -> H-ch -> 0",
-        "max_dx": 517,
-        "max_dy": 291
-      }
+    "generator_record": {
+      "clip": {
+        "path": "demo_pan.mp4",
+        "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
+        "frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
+        "frames": 90,
+        "fps": 15,
+        "width": 842,
+        "height": 474
+      },
+      "generator": {
+        "script": "src/make_demo_clip.py",
+        "source_image": "0000295_02400_d_0000033.jpg",
+        "source_sha256": "f4e6fc5838b411648e0d10845540309874c23bd79a402d6be68bf57cbedf6771",
+        "source_size": [
+          1360,
+          765
+        ],
+        "source_labelled_objects": 317,
+        "selection": "named with --source-image",
+        "dataset": "VisDrone",
+        "dataset_split": "val",
+        "dataset_split_images": 548,
+        "crop_fraction": 0.62,
+        "crop_size": [
+          843,
+          474
+        ],
+        "pan": {
+          "horizontal": "ease-in-out, 0 -> W-cw, one pass",
+          "vertical": "raised cosine, one full sweep, 0 -> H-ch -> 0",
+          "max_dx": 517,
+          "max_dy": 291
+        }
+      },
+      "opencv": "5.0.0"
     },
     "matches_generator_record": true,
-    "fps": 15,
-    "generated_frames": 90
+    "ran_with_mismatch": false
   }
 }

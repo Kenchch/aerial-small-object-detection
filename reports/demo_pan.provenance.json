@@ -2,6 +2,7 @@
   "clip": {
     "path": "demo_pan.mp4",
     "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
+    "frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
     "frames": 90,
     "fps": 15,
     "width": 842,

@@ -96,9 +96,16 @@ def test_a_clip_with_a_generator_record_is_identified_by_it(tmp_path):
 
     info = track._source_provenance(clip)
     assert info["sha256"] == digest
-    assert info["generator"]["source_image"] == "0000295.jpg"
     assert info["matches_generator_record"] is True
-    assert (info["fps"], info["generated_frames"]) == (15, 90)
+    # The WHOLE record, not a selection from it. Copying a few fields across
+    # meant the report carried a summary of the provenance rather than the
+    # provenance, and which fields got copied was decided once and never
+    # revisited - frames_sha256 was added to the sidecar and never reached the
+    # report.
+    assert info["generator_record"] == {
+        "clip": {"sha256": digest, "fps": 15, "frames": 90},
+        "generator": {"source_image": "0000295.jpg", "crop_fraction": 0.62},
+    }
 
 
 def test_a_clip_that_is_not_the_one_the_record_describes_says_so(tmp_path):
@@ -208,3 +215,55 @@ def test_a_card_that_cannot_be_named_is_not_guessed_at():
         raise RuntimeError("invalid device ordinal")
 
     assert track.resolve_device("7", True, out_of_range) == ("cuda:7", None)
+
+
+# --- the source is checked before the run, not after it --------------------- #
+
+
+def _clip_with_record(tmp_path, body: bytes, recorded_sha: str | None = None):
+    clip = tmp_path / "demo_pan.mp4"
+    clip.write_bytes(body)
+    (tmp_path / "demo_pan.provenance.json").write_text(
+        json.dumps(
+            {
+                "clip": {"sha256": recorded_sha or track._sha256(clip)},
+                "generator": {"source_image": "x.jpg"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return clip
+
+
+def test_a_matching_clip_passes_the_up_front_check(tmp_path):
+    clip = _clip_with_record(tmp_path, b"the published clip")
+    assert track.check_source_matches_record(clip) is True
+
+
+def test_no_record_is_not_a_mismatch(tmp_path):
+    """Any video can be passed to --source; most have no sidecar, and that is
+    not something to stop a run over."""
+    clip = tmp_path / "somebody_elses.mp4"
+    clip.write_bytes(b"x")
+    assert track.check_source_matches_record(clip) is True
+
+
+def test_a_clip_that_does_not_match_its_record_stops_the_run(tmp_path):
+    """The comparison used to happen where the report was assembled.
+
+    A clip that did not match its record was therefore profiled in full -
+    ninety frames, a minute of GPU time - and the disagreement showed up as
+    `"matches_generator_record": false` in a file written at the end. That is a
+    fact discovered after paying for it, and a latency figure published on the
+    strength of it is a figure about footage nobody meant to measure.
+    Digesting the file is milliseconds.
+    """
+    clip = _clip_with_record(tmp_path, b"a different clip", recorded_sha="0" * 64)
+    with pytest.raises(SystemExit, match="not the footage that record is about"):
+        track.check_source_matches_record(clip)
+
+
+def test_the_mismatch_can_be_opted_into_explicitly(tmp_path):
+    """Analysing a different input is legitimate; doing it silently is not."""
+    clip = _clip_with_record(tmp_path, b"a different clip", recorded_sha="0" * 64)
+    assert track.check_source_matches_record(clip, allow_mismatch=True) is False
