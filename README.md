@@ -539,7 +539,7 @@ src/evaluate.py         per-class metrics; label-size distribution
 src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
-tests/                  37 tests; run with `pytest`
+tests/                  unit tests; run with `pytest`
 resume_training.ps1     restart an interrupted run from last.pt (Windows)
 runs/                   training artefacts (weights gitignored)
 reports/                evaluation (val + train), benchmark, tracking output (JSON)
@@ -552,8 +552,11 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-37 tests, and they run on a bare clone — no torch, ultralytics or CUDA
-required. Two things they are actually guarding:
+They run on a bare clone — no torch, ultralytics or CUDA required. The count
+is deliberately not written here: it was stated as 37 through two rounds of
+additions and was wrong both times, and a number nobody re-counts is worse
+than no number. `pytest -q` prints it. Two things the suite is actually
+guarding:
 
 - **`--help` must work uninstalled.** `tests/test_cli.py` runs every script's
   `--help` in a subprocess and asserts exit 0. That only holds while the heavy
