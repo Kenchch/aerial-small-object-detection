@@ -230,9 +230,12 @@ anyway. ORT's profiler gives per-node placement: **238 of 238 nodes on CUDA, 0 o
 ## Deployment: tracking
 
 `src/track.py` runs the trained detector through ByteTrack on a video source
-and reports a staged latency profile — decode, detect+track, annotate, encode
-— reconciled against wall-clock time, so no part of the frame budget goes
-unmeasured.
+and reports a staged latency profile — decode, detect+track, annotate, encode,
+plus the once-per-run capture/writer open and flush — reconciled against
+wall-clock time. What the reconciliation gives is a *published* remainder, not
+a guarantee of none: `coverage_pct` and `unaccounted_ms` say how much of the
+frame budget the stages account for, and the gap is Python-level overhead
+between them.
 
 **Footage.** VisDrone2019-DET is sampled from video at a 200-frame interval —
 readable straight off the filenames, whose frame-index field steps
@@ -302,8 +305,9 @@ figure would suggest, and nothing like the 89 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
 
-Association quality: 306 unique tracks, mean length 10.3 frames, 26.1 %
-single-frame ("fragmented") tracks. 306 distinct track ids appear in the
+Association statistics — not association *quality*, which cannot be stated
+without ground-truth track ids this clip does not have: 306 unique tracks,
+mean length 10.3 frames, 26.1 % single-frame ("fragmented") tracks. 306 distinct track ids appear in the
 output; the largest is 9,525. At least 9,219 id values were therefore
 consumed without ever producing a drawn box — ByteTrack's internal counter
 increments for every *tentative* track, including ones spawned by detections
@@ -396,8 +400,11 @@ sweep would make that a measured trade-off rather than a single data point.
 demo clip has no independently moving objects or occlusion, and no ground
 truth track ids exist to score association against.
 
-**Latency figures come from a power-limited laptop GPU** (RTX 2070 Max-Q).
-The relative ordering of backends transfers; the absolute milliseconds do not.
+**Latency figures come from a power-limited laptop GPU** (RTX 2070 Max-Q),
+and from that GPU only. The absolute milliseconds are specific to it. The
+backend ordering is the more portable half of the result, but one machine is
+one machine — nothing here has been measured on a second device, so treat the
+ordering as a finding about this hardware rather than a general one.
 
 **The dominant error mode is untouched by anything tried here.**
 Misclassification exceeds missed detections for seven of ten classes, mostly
