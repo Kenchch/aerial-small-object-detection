@@ -203,6 +203,7 @@ def test_an_unchanged_export_is_reused(tmp_path):
         "imgsz",
         "opset",
         "simplify",
+        "dynamic",
         "ultralytics",
         "onnx",
         "onnxslim",
@@ -222,6 +223,24 @@ def test_any_manifest_field_changing_invalidates_the_cache(tmp_path, field):
     stamp.write_text(json.dumps(recorded), encoding="utf-8")
 
     assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+
+def test_the_manifest_records_the_flags_the_export_actually_used(tmp_path, monkeypatch):
+    """The manifest is the cache key, so it has to follow the export flags.
+
+    It repeated `"simplify": True` as its own literal beside the export's own
+    `simplify=True`. Toggling the export would have left every cached graph
+    still stamped with the old value and therefore still looking current - the
+    exact class of stale hit the manifest was introduced to prevent. Both now
+    read one constant.
+    """
+    weights, onnx = _stub_export(tmp_path)
+    monkeypatch.setattr(benchmark, "ONNX_SIMPLIFY", False)
+    monkeypatch.setattr(benchmark, "ONNX_DYNAMIC", True)
+
+    recorded = benchmark._export_manifest(onnx, weights, 1024)
+    assert recorded["simplify"] is False
+    assert recorded["dynamic"] is True
 
 
 def test_a_missing_or_unreadable_stamp_forces_a_re_export(tmp_path):
@@ -281,3 +300,54 @@ def test_the_staged_copy_is_removed_even_when_the_export_fails(tmp_path):
         benchmark.export_onnx(weights, cache / "best_1024.onnx", 1024, exporter=boom)
 
     assert list(cache.iterdir()) == []
+
+
+# --- CUDA placement --------------------------------------------------------- #
+
+
+def test_a_graph_fully_on_cuda_passes():
+    benchmark.check_placement(
+        {
+            "nodes_total": 238,
+            "by_provider": {"CUDAExecutionProvider": 238},
+            "cpu_fallback_nodes": 0,
+            "all_on_cuda": True,
+        }
+    )
+
+
+def test_cpu_fallback_stops_the_run_instead_of_being_published():
+    """`all_on_cuda` was recorded in benchmark.json and never read.
+
+    A run with part of its graph on the CPU still produced a row labelled
+    "ONNX CUDA" and published it - the milliseconds would be real and the label
+    on them would not. Registering CUDAExecutionProvider does not mean the
+    nodes went there: ORT silently places whatever that provider cannot run on
+    the CPU, and an unsupported operator is the ordinary way it happens.
+    """
+    partial = {
+        "nodes_total": 238,
+        "by_provider": {"CUDAExecutionProvider": 234, "CPUExecutionProvider": 4},
+        "cpu_fallback_nodes": 4,
+        "all_on_cuda": False,
+    }
+    with pytest.raises(SystemExit, match="4 of 238"):
+        benchmark.check_placement(partial)
+
+    # The opt-out is explicit, and says so in --help rather than being a
+    # silent default.
+    benchmark.check_placement(partial, allow_cpu_fallback=True)
+
+
+def test_a_profile_that_saw_no_nodes_is_not_treated_as_success():
+    """all_on_cuda is False when nodes_total is 0, and a profiling run that
+    recorded nothing is a broken measurement, not a clean one."""
+    with pytest.raises(SystemExit):
+        benchmark.check_placement(
+            {
+                "nodes_total": 0,
+                "by_provider": {},
+                "cpu_fallback_nodes": 0,
+                "all_on_cuda": False,
+            }
+        )

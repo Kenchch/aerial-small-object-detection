@@ -40,6 +40,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 ONNX_OPSET = 13
+# Export flags. Constants because they are BOTH arguments to the export and
+# part of the cache key: the manifest repeated `"simplify": True` as its own
+# literal, so toggling the export flag would have left the manifest still
+# claiming the old value and every cached graph looking current. One name,
+# read by both.
+ONNX_SIMPLIFY = True  # onnxslim folds constants; smaller, faster to load
+ONNX_DYNAMIC = False  # static shapes let ORT pick better kernels
 WARMUP_ITERS = 20
 TIMED_ITERS = 100
 
@@ -218,6 +225,30 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     }
 
 
+def check_placement(placement: dict, allow_cpu_fallback: bool = False) -> None:
+    """Act on the placement result instead of only recording it.
+
+    `all_on_cuda` was written into benchmark.json and nothing ever read it, so a
+    run with half its graph on the CPU still produced a row labelled "ONNX
+    CUDA" and published it. The measurement would be real; the label on it
+    would not. Registering CUDAExecutionProvider does not mean the nodes went
+    there - ORT silently places whatever that provider cannot run on the CPU,
+    and an opset or an operator it does not support is the ordinary way that
+    happens.
+
+    Separate from run_one so it is testable without a GPU, a checkpoint or
+    ultralytics, which is the environment CI runs in.
+    """
+    if placement.get("all_on_cuda") or allow_cpu_fallback:
+        return
+    raise SystemExit(
+        f"{placement.get('cpu_fallback_nodes')} of {placement.get('nodes_total')} "
+        f"nodes ran on the CPU: {placement.get('by_provider')}. Those numbers "
+        f"would be published under a CUDA label. Pass --allow-cpu-fallback to "
+        f"measure it anyway - the placement is recorded in the output either way."
+    )
+
+
 def _environment(imgsz: int) -> dict:
     """What a latency figure needs alongside it to mean anything.
 
@@ -280,8 +311,8 @@ def export_onnx(weights: Path, onnx_path: Path, imgsz: int, exporter=None) -> No
                     format="onnx",
                     imgsz=imgsz,
                     opset=ONNX_OPSET,
-                    simplify=True,  # onnxslim folds constants; smaller, faster to load
-                    dynamic=False,  # static shapes let ORT pick better kernels
+                    simplify=ONNX_SIMPLIFY,
+                    dynamic=ONNX_DYNAMIC,
                 )
 
         produced = Path(exporter(staged_weights))
@@ -330,7 +361,8 @@ def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
         "onnx_sha256": _sha256(onnx_path) if onnx_path.exists() else None,
         "imgsz": imgsz,
         "opset": ONNX_OPSET,
-        "simplify": True,
+        "simplify": ONNX_SIMPLIFY,
+        "dynamic": ONNX_DYNAMIC,
         "ultralytics": installed("ultralytics"),
         "onnx": installed("onnx"),
         "onnxslim": installed("onnxslim"),
@@ -363,6 +395,7 @@ def run_one(
     device: str = "0",
     map_tolerance: float = 0.01,
     cache_dir: Path | None = None,
+    allow_cpu_fallback: bool = False,
 ) -> dict:
     """Accuracy + latency across every available backend."""
     import torch
@@ -457,9 +490,11 @@ def run_one(
     available = ort.get_available_providers()
     if "CUDAExecutionProvider" in available:
         row["onnx_cuda"] = bench_onnx(onnx_path, imgsz, "CUDAExecutionProvider")
-        row["onnx_cuda_placement"] = verify_cuda_placement(onnx_path, imgsz)
-        print(f"  ONNX node placement: {row['onnx_cuda_placement']}")
+        placement = verify_cuda_placement(onnx_path, imgsz)
+        row["onnx_cuda_placement"] = placement
+        print(f"  ONNX node placement: {placement}")
         print(f"  ONNXRuntime GPU: {row['onnx_cuda']}")
+        check_placement(placement, allow_cpu_fallback)
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
     print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
@@ -498,6 +533,14 @@ def main() -> None:
         "but fails when the weights are mounted read-only - the "
         "container mounts /weights:ro and points this at /out.",
     )
+    p.add_argument(
+        "--allow-cpu-fallback",
+        action="store_true",
+        help="Publish the ONNX-CUDA row even when some nodes were "
+        "placed on the CPU. Off by default: a partly-CPU graph "
+        "measured under a CUDA label is a wrong number, not a "
+        "slow one.",
+    )
     p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
     args = p.parse_args()
 
@@ -508,6 +551,7 @@ def main() -> None:
         args.device,
         args.map_tolerance,
         args.cache_dir,
+        args.allow_cpu_fallback,
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
