@@ -117,6 +117,26 @@ jobs:
           # ENTRYPOINT is already python, so the command starts at -c.
           docker run --rm aerial-detection -c             "import yaml; c=yaml.safe_load(open('docker/VisDrone.yaml'));              assert c['path'].startswith('/data'), c['path'];              assert 'download' not in c, 'the container spec must not auto-download';              print('  container dataset spec ->', c['path'])"
 
+      # A read-only /weights must survive an export. CI never ran a successful
+      # benchmark - only the no-mount failure and --help - so it could not have
+      # caught the export writing into the weights mount. A stub exporter makes
+      # the path testable without a GPU, a checkpoint or a dataset.
+      - name: Export works with weights mounted read-only
+        run: |
+          mkdir -p ro-weights rw-cache && echo fake > ro-weights/best.pt
+          docker run --rm             -v "$PWD/ro-weights:/weights:ro"             -v "$PWD/rw-cache:/out"             aerial-detection -c "
+          import sys; sys.path.insert(0, 'src')
+          from pathlib import Path
+          import benchmark
+          def stub(src):
+              p = src.with_suffix('.onnx'); p.write_bytes(b'graph'); return p
+          benchmark.export_onnx(Path('/weights/best.pt'),
+                                Path('/out/onnx-cache/best_1024.onnx'), 1024, exporter=stub)
+          print('  exported to /out with /weights read-only')
+          "
+          test -f rw-cache/onnx-cache/best_1024.onnx || { echo "no onnx in the cache"; exit 1; }
+          test "$(ls ro-weights)" = "best.pt" || { echo "the weights mount was written to"; exit 1; }
+
       # Every script must still answer --help inside the image, with no mounts
       # and no GPU. This is the containerised half of test_cli.py.
       - name: --help works inside the image

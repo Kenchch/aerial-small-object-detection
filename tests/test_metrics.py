@@ -230,3 +230,54 @@ def test_a_missing_or_unreadable_stamp_forces_a_re_export(tmp_path):
 
     benchmark._MANIFEST_STAMP(onnx).write_text("{not json", encoding="utf-8")
     assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+
+def test_export_writes_nothing_into_the_weights_directory(tmp_path):
+    """The weights mount is read-only in the container, and the first run has no
+    cached graph, so the export path must not touch it.
+
+    Ultralytics writes the .onnx beside the .pt it loaded - verified by
+    exporting a checkpoint from a temp directory and finding probe.onnx there -
+    so pointing only the *destination* at a cache dir is not enough. The
+    checkpoint is copied into the cache and exported from the copy.
+    """
+    weights_dir = tmp_path / "weights"
+    weights_dir.mkdir()
+    weights = weights_dir / "best.pt"
+    weights.write_bytes(b"checkpoint")
+    before = sorted(p.name for p in weights_dir.iterdir())
+
+    cache = tmp_path / "cache"
+    onnx_path = cache / "best_1024.onnx"
+
+    def fake_export(src):
+        # Stands in for ultralytics: writes beside whatever .pt it was given.
+        assert src.parent == cache, f"exported from {src.parent}, not the cache"
+        produced = src.with_suffix(".onnx")
+        produced.write_bytes(b"graph")
+        return produced
+
+    benchmark.export_onnx(weights, onnx_path, 1024, exporter=fake_export)
+
+    assert onnx_path.read_bytes() == b"graph"
+    assert sorted(p.name for p in weights_dir.iterdir()) == before, (
+        "the export path wrote into the weights directory"
+    )
+    assert sorted(p.name for p in cache.iterdir()) == ["best_1024.onnx"], (
+        "the staged checkpoint copy was left behind"
+    )
+
+
+def test_the_staged_copy_is_removed_even_when_the_export_fails(tmp_path):
+    """A failed export must not leave a duplicate checkpoint in the cache."""
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"checkpoint")
+    cache = tmp_path / "cache"
+
+    def boom(src):
+        raise RuntimeError("export failed")
+
+    with pytest.raises(RuntimeError, match="export failed"):
+        benchmark.export_onnx(weights, cache / "best_1024.onnx", 1024, exporter=boom)
+
+    assert list(cache.iterdir()) == []
