@@ -20,6 +20,7 @@ Usage
 
 import argparse
 import json
+import re
 import statistics
 import time
 from collections import defaultdict
@@ -60,6 +61,38 @@ def track_colour(track_id: int) -> tuple:
     return int(c[0]), int(c[1]), int(c[2])
 
 
+def _for_report(path: Path) -> str:
+    """A path fit to be committed.
+
+    Relative to the project root, and as_posix rather than str(): these reports
+    are committed for readers to look at, so neither the absolute path nor the
+    path separator of whoever generated it should end up baked into the file.
+    """
+    resolved = Path(path).resolve()
+    if resolved.is_relative_to(PROJECT_ROOT):
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    return str(path)
+
+
+def natural_key(name: str) -> tuple:
+    """Sort key that puts frame2 before frame10.
+
+    `sorted()` on filenames is lexicographic, so a sequence written as
+    frame1.jpg ... frame10.jpg is fed to the tracker in the order 1, 10, 11,
+    2, 3. Nothing errors: the video comes out re-ordered and the tracker
+    associates across jumps that never happened, so track lengths and the
+    churn ratio describe a sequence that does not exist.
+
+    Digit runs compare as integers, everything else casefolded. The (0, ...) /
+    (1, ...) tags keep the key total - two names can put a number and a word at
+    the same position, and comparing int with str raises.
+    """
+    return tuple(
+        (1, int(part), "") if part.isdigit() else (0, 0, part.lower())
+        for part in re.split(r"(\d+)", name)
+    )
+
+
 def frame_source(source: Path):
     """Yield (frame, fps, size) from a video file or a directory of images."""
     import cv2
@@ -70,7 +103,8 @@ def frame_source(source: Path):
                 p
                 for p in source.iterdir()
                 if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
-            ]
+            ],
+            key=lambda p: natural_key(p.name),
         )
         if not files:
             raise SystemExit(f"no images in {source}")
@@ -158,11 +192,32 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    # Checked before the model is loaded, let alone before either file handle
+    # is opened. cv2.VideoWriter truncates its target on open, so pointing
+    # --out at --source destroys the input while the reader is still streaming
+    # it - and the default --out is reports/track_out.mp4, the very file the
+    # README tells you to look at afterwards. resolve() so that
+    # reports/track_out.mp4 and ./reports/../reports/track_out.mp4 are
+    # recognised as the same file.
+    if not args.no_write and args.source.resolve() == args.out.resolve():
+        raise SystemExit(
+            f"--source and --out are the same file ({args.out}). The writer "
+            f"truncates its target on open, so this would destroy the input "
+            f"mid-read. Pass a different --out, or --no-write to profile only."
+        )
+
     import cv2
     from ultralytics import YOLO
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     model = YOLO(str(args.weights))
+
+    # The wall clock starts HERE, not after setup. Opening the capture, reading
+    # the header - which for an image sequence is a full decode of frame 0 -
+    # and opening the writer are all work the pipeline does, and all of it used
+    # to sit outside the measured region while the report claimed no stage went
+    # unmeasured.
+    wall_start = time.perf_counter()
 
     src = frame_source(args.source)
     _, fps, (W, H) = next(src)
@@ -183,6 +238,11 @@ def main() -> None:
                 f"(mp4v codec unavailable in this OpenCV build?)"
             )
 
+    # Everything before the first frame: capture open, header read, writer
+    # open. Reported rather than folded into t_decode, so the per-frame stage
+    # numbers stay per-frame.
+    setup_ms = (time.perf_counter() - wall_start) * 1000
+
     t_infer, t_draw, t_write, t_decode = [], [], [], []
     # Ultralytics fills Results.speed with its own internal split of the call.
     # Without these, "detect + track" is a single number roughly 3x the raw
@@ -191,7 +251,6 @@ def main() -> None:
     t_pre, t_fwd, t_post = [], [], []
     track_frames = defaultdict(int)  # track id -> frames seen
     n_frames = 0
-    wall_start = time.perf_counter()
 
     # Decode has to be timed too. Leaving it out was how the first version of
     # this profile accounted for only a third of wall-clock time.
@@ -264,9 +323,17 @@ def main() -> None:
 
         t_decode_start = time.perf_counter()
 
-    wall = time.perf_counter() - wall_start
+    # release() before the clock stops. It finalises the container - flushing
+    # buffered frames and writing the moov atom - which is real encode work,
+    # and on a long clip it is not a rounding error. Stopping the timer first
+    # was how "encode" could look cheap in a report whose own wall time did not
+    # contain the expensive half of it.
+    flush_ms = 0.0
     if writer is not None:
+        t0 = time.perf_counter()
         writer.release()
+        flush_ms = (time.perf_counter() - t0) * 1000
+    wall = time.perf_counter() - wall_start
 
     if not n_frames:
         raise SystemExit("no frames read")
@@ -301,7 +368,18 @@ def main() -> None:
     # context creation and cuDNN autotuning. Report both, and reconcile them
     # against wall time so any unmeasured remainder is visible rather than
     # quietly absorbed.
-    accounted_mean = mean(t_decode) + mean(t_infer) + mean(t_draw) + mean(t_write)
+    # Setup and flush happen once, not per frame, so they are amortised across
+    # the run to be comparable with the per-frame means. Left out entirely,
+    # they showed up as "unaccounted" and the coverage figure blamed the
+    # per-frame stages for time they never spent.
+    once_per_run_mean = (setup_ms + flush_ms) / n_frames
+    accounted_mean = (
+        mean(t_decode)
+        + mean(t_infer)
+        + mean(t_draw)
+        + mean(t_write)
+        + once_per_run_mean
+    )
     per_frame_wall = wall / n_frames * 1000
 
     # Association is not timed directly -- Ultralytics runs the tracker inside
@@ -329,6 +407,13 @@ def main() -> None:
             "detect_and_track": round(med(t_infer), 2),
             "annotate": round(med(t_draw), 2),
             "encode": round(med(t_write), 2) if t_write else None,
+        },
+        # Once per run, not per frame: capture open + header read + writer
+        # open, and the writer's release() at the end.
+        "open_and_flush_ms": {
+            "setup": round(setup_ms, 2),
+            "flush": round(flush_ms, 2),
+            "amortised_per_frame": round(once_per_run_mean, 3),
         },
         "stage_ms_mean": {
             "decode": round(mean(t_decode), 2),
@@ -380,16 +465,17 @@ def main() -> None:
             "mean_boxes_per_frame": round(sum(lengths) / n_frames, 1),
         },
         "config": {
-            # Relative to the project root, and as_posix rather than str():
-            # this report is committed for readers to look at, so neither the
-            # absolute path nor the path separator of whoever generated it
-            # should end up baked into the file.
-            "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
-            if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
-            else str(args.weights),
+            "weights": _for_report(args.weights),
+            "source": _for_report(args.source),
+            # None rather than a path when nothing was written, so the report
+            # cannot name an output file that does not exist.
+            "out": None if args.no_write else _for_report(args.out),
             "imgsz": args.imgsz,
             "conf": args.conf,
             "tracker": args.tracker,
+            # Every latency figure in this file is a property of the device it
+            # ran on, and the report did not say which one that was.
+            "device": args.device,
         },
     }
 

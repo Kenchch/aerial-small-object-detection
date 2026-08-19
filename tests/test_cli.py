@@ -78,3 +78,68 @@ def test_the_blocker_actually_blocks(bare_env):
     )
     assert proc.returncode != 0
     assert "deliberately unavailable" in proc.stderr
+
+
+def test_track_refuses_to_write_over_its_own_source(bare_env, tmp_path):
+    """cv2.VideoWriter truncates its target on open.
+
+    Pointing --out at --source therefore destroys the input while the reader is
+    still streaming it, and the default --out is reports/track_out.mp4 - the
+    very file the README tells you to look at afterwards, and a plausible
+    --source for a second pass. Nothing warned; the clip simply came back
+    truncated.
+
+    Run with the heavy deps blocked, which also proves the check happens before
+    the model is loaded rather than after several seconds of CUDA startup.
+    """
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"not really a video, and never opened")
+    track_py = SRC_DIR / "track.py"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(track_py),
+            "--weights",
+            "best.pt",
+            "--source",
+            str(clip),
+            "--out",
+            str(clip),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=bare_env,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "same file" in proc.stderr, proc.stderr[-800:]
+    assert clip.read_bytes() == b"not really a video, and never opened"
+
+
+def test_profiling_only_may_reuse_the_path(bare_env, tmp_path):
+    """--no-write opens no writer, so there is nothing to collide with. The
+    guard must not refuse a run that cannot damage anything - it fails later,
+    on the blocked ultralytics import, which is the expected failure here."""
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SRC_DIR / "track.py"),
+            "--weights",
+            "best.pt",
+            "--source",
+            str(clip),
+            "--out",
+            str(clip),
+            "--no-write",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=bare_env,
+        check=False,
+    )
+    assert "same file" not in proc.stderr
