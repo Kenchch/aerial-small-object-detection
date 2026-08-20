@@ -1,40 +1,40 @@
 {
   "frames": 90,
-  "wall_s": 15.02,
-  "end_to_end_fps": 6.0,
-  "per_frame_wall_ms": 166.87,
+  "wall_s": 9.52,
+  "end_to_end_fps": 9.5,
+  "per_frame_wall_ms": 105.77,
   "stage_ms_median": {
-    "decode": 0.95,
-    "detect_and_track": 32.26,
-    "annotate": 2.92,
-    "encode": 2.3
+    "decode": 0.94,
+    "detect_and_track": 32.21,
+    "annotate": 3.11,
+    "encode": 2.46
   },
   "open_and_flush_ms": {
-    "setup": 8.89,
-    "flush": 0.96,
-    "amortised_per_frame": 0.109
+    "setup": 8.38,
+    "flush": 1.07,
+    "amortised_per_frame": 0.105
   },
   "stage_ms_mean": {
-    "decode": 1.11,
-    "detect_and_track": 159.3,
-    "annotate": 3.74,
-    "encode": 2.52
+    "decode": 1.1,
+    "detect_and_track": 97.93,
+    "annotate": 3.55,
+    "encode": 3.01
   },
   "detect_and_track_ms_median": {
-    "preprocess": 4.96,
-    "forward": 14.14,
-    "postprocess_nms": 1.68,
-    "association_and_overhead": 11.23
+    "preprocess": 5.19,
+    "forward": 13.16,
+    "postprocess_nms": 1.77,
+    "association_and_overhead": 11.81
   },
   "warmup": {
-    "first_frame_ms": 11248.3,
-    "steady_state_ms": 32.26,
-    "warmup_penalty_x": 348.7
+    "first_frame_ms": 5804.6,
+    "steady_state_ms": 32.21,
+    "warmup_penalty_x": 180.2
   },
   "reconciliation": {
-    "accounted_mean_ms": 166.79,
-    "unaccounted_ms": 0.08,
-    "coverage_pct": 100.0
+    "accounted_mean_ms": 105.7,
+    "unaccounted_ms": 0.07,
+    "coverage_pct": 99.9
   },
   "tracks": {
     "unique_ids": 306,
@@ -61,6 +61,15 @@
     "cuda": "12.4",
     "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
     "ultralytics": "8.4.110"
+  },
+  "output": {
+    "path": "reports/track_out.mp4",
+    "sha256": "fe9e21cccb5711d15b85871f95d6e05b267835cf37743828d968f6dbdc192cfd",
+    "decoded_frames_sha256": "d19caa59d56e1d066d6f3d0e9760da9cb1a398e6fb85f0cfd9a9851557d03862",
+    "frames": 90,
+    "width": 842,
+    "height": 474,
+    "container_fps": 15.0
   },
   "source": {
     "path": "reports/demo_pan.mp4",

@@ -32,6 +32,10 @@ from pathlib import Path
 # environment, which makes the CLI undiscoverable exactly when someone is
 # trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# cv2.CAP_PROP_FPS, spelled out so probe_video and its tests do not drag
+# OpenCV in. The value is fixed by the OpenCV ABI.
+CAP_PROP_FPS = 5
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
 # Colours are per-track, not per-class, because the thing being communicated in
@@ -175,6 +179,76 @@ def _source_provenance(source: Path) -> dict:
             recorded["clip"].get("sha256") == info["sha256"]
         )
     return info
+
+
+def probe_video(path: Path, open_capture=None) -> dict:
+    """Decode a video and report what is actually in it.
+
+    The same check make_demo_clip does on the clip it produces, applied to the
+    clip this produces. `frames` in the profile counts what was processed; it
+    is not evidence about the file, and a codec that drops the last few frames
+    leaves a shorter video while the report says ninety.
+
+    `open_capture` is injected so this is testable without OpenCV, which CI
+    deliberately does not install.
+    """
+    if open_capture is None:  # pragma: no cover - the real path needs cv2
+        import cv2
+
+        open_capture = cv2.VideoCapture
+
+    cap = open_capture(str(path))
+    try:
+        if not cap.isOpened():
+            raise SystemExit(f"{path} was written but cannot be decoded")
+        digest = hashlib.sha256()
+        n = 0
+        width = height = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            n += 1
+            height, width = frame.shape[:2]
+            digest.update(memoryview(frame).tobytes())
+        fps = cap.get(CAP_PROP_FPS)
+    finally:
+        cap.release()
+    return {
+        "frames": n,
+        "width": width,
+        "height": height,
+        "fps": round(fps, 3) if fps else None,
+        "decoded_frames_sha256": digest.hexdigest(),
+    }
+
+
+def check_output(
+    probe: dict, *, frames: int, width: int, height: int, name: str
+) -> None:
+    """The written video has to contain what the profile says was processed.
+
+    `frames` in the report counts what went THROUGH the pipeline. A
+    VideoWriter accepts every one of them and reports nothing, so a codec that
+    drops the last few leaves a shorter video while the report still says
+    ninety - and the GIF built from it then shows a clip that does not match
+    the numbers beside it.
+    """
+    problems = [
+        f"{label}: processed {expected}, file has {actual}"
+        for label, expected, actual in (
+            ("frames", frames, probe["frames"]),
+            ("width", width, probe["width"]),
+            ("height", height, probe["height"]),
+        )
+        if expected != actual
+    ]
+    if problems:
+        raise SystemExit(
+            f"{name} does not match the run that produced it - "
+            + "; ".join(problems)
+            + ". The previous output is untouched."
+        )
 
 
 def check_source_matches_record(source: Path, allow_mismatch: bool = False) -> bool:
@@ -454,6 +528,11 @@ def main() -> None:
     # the only ones not covered.
     src = None
     writer = None
+    # Staged, exactly like the demo clip. Writing straight to reports/
+    # track_out.mp4 destroyed the previous output before anything had
+    # established that this run would produce a usable one - and the suffix is
+    # kept because OpenCV picks its container from the file EXTENSION.
+    staged_out = args.out.with_name(f"{args.out.stem}.tmp{args.out.suffix}")
     try:
         src = frame_source(args.source)
         _, fps, (W, H) = next(src)
@@ -461,7 +540,7 @@ def main() -> None:
         if not args.no_write:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             writer = cv2.VideoWriter(
-                str(args.out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)
+                str(staged_out), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H)
             )
             # Without this check, a missing mp4v/FFmpeg codec makes write() a
             # silent no-op: the script still exits 0 and prints a frame count,
@@ -469,7 +548,7 @@ def main() -> None:
             # or missing) output file -- pointing at the wrong script entirely.
             if not writer.isOpened():
                 raise SystemExit(
-                    f"cannot open VideoWriter for {args.out} "
+                    f"cannot open VideoWriter for {staged_out} "
                     f"(mp4v codec unavailable in this OpenCV build?)"
                 )
     except BaseException:
@@ -477,6 +556,7 @@ def main() -> None:
             src.close()
         if writer is not None:
             writer.release()
+        staged_out.unlink(missing_ok=True)
         raise
 
     # Everything before the first frame: capture open, header read, writer
@@ -591,19 +671,45 @@ def main() -> None:
             flush_ms = (time.perf_counter() - t0) * 1000
         src.close()
         released = True
-    finally:
+    except BaseException:
+        # The failure path. Nothing is timed here - there will be no report -
+        # and the half-written output goes with it, so reports/ is never left
+        # holding a truncated track_out.mp4 under a name that looks finished.
         if not released:
-            # The failure path. Nothing is timed here - there will be no report
-            # - the point is only that the handles do not outlive the process's
-            # last use of them.
             src.close()
             if writer is not None:
                 writer.release()
+        staged_out.unlink(missing_ok=True)
+        raise
 
     wall = time.perf_counter() - wall_start
 
     if not n_frames:
         raise SystemExit("no frames read")
+
+    # The output video gets the same evidence the input has. A VideoWriter
+    # accepts every frame and reports nothing, so `frames` above only proves
+    # how many frames were PROCESSED - it says nothing about how many reached
+    # the file. Reading it back is what closes that, and it is one pass over a
+    # few megabytes on a run that already took a minute.
+    output = None
+    if writer is not None:
+        probe = probe_video(staged_out)
+        try:
+            check_output(probe, frames=n_frames, width=W, height=H, name=args.out.name)
+        except BaseException:
+            staged_out.unlink(missing_ok=True)
+            raise
+        staged_out.replace(args.out)
+        output = {
+            "path": _for_report(args.out),
+            "sha256": _sha256(args.out),
+            "decoded_frames_sha256": probe["decoded_frames_sha256"],
+            "frames": probe["frames"],
+            "width": probe["width"],
+            "height": probe["height"],
+            "container_fps": probe["fps"],
+        }
 
     # --- Tracking quality -------------------------------------------------
     # Mean track length is the honest single number for association quality:
@@ -744,6 +850,9 @@ def main() -> None:
         # on and the footage it ran over. Both are recorded, so the numbers can
         # be checked rather than taken on trust.
         "environment": _environment(args.device),
+        # None when --no-write was passed, so the report cannot describe an
+        # output file it did not produce.
+        "output": output,
         "source": {
             **_source_provenance(args.source),
             # False only when --allow-source-mismatch was used, since the run
