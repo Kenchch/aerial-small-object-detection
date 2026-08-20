@@ -255,20 +255,20 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.95 ms | 1.11 ms |
-| detect + track | 32.26 ms | **159.3 ms** |
-| ├ preprocess | 4.96 ms | |
-| ├ forward | 14.14 ms | |
-| ├ postprocess (NMS) | 1.68 ms | |
-| └ association + overhead | 11.23 ms | |
-| annotate | 2.92 ms | 3.74 ms |
-| encode | 2.3 ms | 2.52 ms |
-| open + flush (once per run) | | 0.109 ms |
-| **accounted** | | **166.79 ms** |
-| **wall per frame** | | **166.87 ms** |
+| decode | 0.94 ms | 1.1 ms |
+| detect + track | 32.21 ms | **97.93 ms** |
+| ├ preprocess | 5.19 ms | |
+| ├ forward | 13.16 ms | |
+| ├ postprocess (NMS) | 1.77 ms | |
+| └ association + overhead | 11.81 ms | |
+| annotate | 3.11 ms | 3.55 ms |
+| encode | 2.46 ms | 3.01 ms |
+| open + flush (once per run) | | 0.105 ms |
+| **accounted** | | **105.7 ms** |
+| **wall per frame** | | **105.77 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 32.01 against 32.26 here. That is the honest form: the frame
+parent median — 31.93 against 32.21 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
@@ -287,8 +287,8 @@ range rather than a stable measurement. The *ratios* between stages are far
 steadier than the absolute milliseconds, and they are what the argument below
 rests on.
 
-**`detect + track` (32.26 ms) is not the same measurement as the 11.74 ms
-PyTorch core row in the backend table above, and the 20.52 ms between them is the
+**`detect + track` (32.21 ms) is not the same measurement as the 11.74 ms
+PyTorch core row in the backend table above, and the 20.47 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -298,19 +298,19 @@ above, taken from Ultralytics' `Results.speed`, are where that time goes.
 reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
-**The forward pass is 44 % of this stage. Preprocessing and association are
-another 50 %,** and neither is affected by the export format. That is the
+**The forward pass is 41 % of this stage. Preprocessing and association are
+another 53 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.47 ms on the forward pass, while 18.12 ms per frame sits in the
+buys 2.47 ms on the forward pass, while 19.05 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.74 → 14.14 ms difference on the forward pass itself is
+The remaining 11.74 → 13.16 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **11,248 ms — 349× the steady-state 32.26 ms**, which is cold-start
+frame costs **5,805 ms — 180× the steady-state 32.21 ms**, which is cold-start
 initialisation: the CUDA context and cuDNN's autotuning, plus Ultralytics
 building its predictor and the ByteTrack instance, both of which are
 constructed lazily on the first `model.track()` call. It is not attributed to
@@ -319,10 +319,10 @@ the first frame costs this, not which part of it costs what.
 
 Amortised over 90 frames that is most of the gap between the mean (159.3 ms)
 and the median (32.26 ms), which is why this
-clip's end-to-end throughput (**6.0 FPS**) is well below its steady-state rate.
+clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.43 ms/frame → 26.0 FPS**, not the ~31 FPS a detect+track-only
+— which gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a detect+track-only
 figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
@@ -620,6 +620,7 @@ src/evaluate.py         per-class metrics; label-size distribution
 src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
+src/make_demo_gif.py    README GIF from track_out.mp4, with its digest
 tests/                  unit tests; run with `pytest`
 resume_training.ps1     restart an interrupted run from last.pt (Windows)
 runs/                   training artefacts (weights gitignored)
@@ -656,6 +657,17 @@ Deliberately not enumerated exhaustively — a list in a README goes stale the
 moment a test is added, and this one had. `pytest -q --collect-only` is the
 current answer.
 
-`reports/tracking_demo.gif` was made by hand from `reports/track_out.mp4`
-(ffmpeg) and has no script in the repo; `src/track.py --source
+**The output video is evidence too.** `reports/track_out.mp4` is written to a
+temporary file, decoded back after the writer closes, and checked for frame
+count and dimensions before it replaces the previous output — a `VideoWriter`
+accepts every frame and reports nothing, so `frames` in the profile only counts
+what was *processed*. Its sha256 (`fe9e21cccb5711d1…`) and a digest of its
+decoded frames go into `reports/tracking.json` under `output`.
+
+`reports/tracking_demo.gif` is built from it by `src/make_demo_gif.py`, which
+records the source mp4's digest in `reports/tracking_demo.provenance.json`.
+That digest matches `output.sha256` above, which is what makes the GIF part of
+the same chain rather than an illustration. It used to be a hand-run ffmpeg
+command that lived in somebody's shell history, with nothing saying which run
+it showed. `src/track.py --source
 reports/demo_pan.mp4` regenerates the underlying video.

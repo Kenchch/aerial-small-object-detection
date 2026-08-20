@@ -6,6 +6,7 @@ numpy, which is the one dependency guarded below.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -267,3 +268,81 @@ def test_the_mismatch_can_be_opted_into_explicitly(tmp_path):
     """Analysing a different input is legitimate; doing it silently is not."""
     clip = _clip_with_record(tmp_path, b"a different clip", recorded_sha="0" * 64)
     assert track.check_source_matches_record(clip, allow_mismatch=True) is False
+
+
+# --- the output video is evidence too --------------------------------------- #
+
+
+class _Cap:
+    def __init__(self, frames, fps=15.0, opened=True):
+        self._frames, self._fps, self._opened = list(frames), fps, opened
+        self.released = False
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        return (True, self._frames.pop(0)) if self._frames else (False, None)
+
+    def get(self, prop):
+        assert prop == track.CAP_PROP_FPS
+        return self._fps
+
+    def release(self):
+        self.released = True
+
+
+def _fake_frames(n, w=8, h=4, seed=0):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    return [rng.integers(0, 255, (h, w, 3), dtype=np.uint8) for _ in range(n)]
+
+
+def test_the_output_video_is_read_back():
+    """`frames` in the profile counts what was PROCESSED. That is not evidence
+    about the file: a VideoWriter accepts every frame and reports nothing, so a
+    codec that drops the last few leaves a shorter video while the report says
+    ninety."""
+    cap = _Cap(_fake_frames(90))
+    probe = track.probe_video(Path("track_out.mp4"), open_capture=lambda _: cap)
+    assert probe["frames"] == 90
+    assert (probe["width"], probe["height"]) == (8, 4)
+    assert len(probe["decoded_frames_sha256"]) == 64
+    assert cap.released
+
+
+def test_an_undecodable_output_is_a_failure():
+    with pytest.raises(SystemExit, match="cannot be decoded"):
+        track.probe_video(
+            Path("track_out.mp4"), open_capture=lambda _: _Cap([], opened=False)
+        )
+
+
+def test_the_output_digest_follows_the_pixels():
+    a = track.probe_video(Path("a"), open_capture=lambda _: _Cap(_fake_frames(4)))
+    b = track.probe_video(
+        Path("b"), open_capture=lambda _: _Cap(_fake_frames(4, seed=9))
+    )
+    assert a["decoded_frames_sha256"] != b["decoded_frames_sha256"]
+
+
+def test_a_truncated_output_video_is_refused():
+    """`frames` in the report counts what was PROCESSED. A codec that drops the
+    last few leaves a shorter video while the report still says ninety - and
+    the GIF built from it then shows a clip that does not match the numbers
+    printed beside it."""
+    probe = track.probe_video(Path("x"), open_capture=lambda _: _Cap(_fake_frames(87)))
+    with pytest.raises(SystemExit, match="frames: processed 90, file has 87"):
+        track.check_output(probe, frames=90, width=8, height=4, name="track_out.mp4")
+
+
+def test_an_output_at_the_wrong_size_is_refused():
+    probe = track.probe_video(Path("x"), open_capture=lambda _: _Cap(_fake_frames(3)))
+    with pytest.raises(SystemExit, match="width: processed 842, file has 8"):
+        track.check_output(probe, frames=3, width=842, height=4, name="track_out.mp4")
+
+
+def test_a_complete_output_passes():
+    probe = track.probe_video(Path("x"), open_capture=lambda _: _Cap(_fake_frames(90)))
+    track.check_output(probe, frames=90, width=8, height=4, name="track_out.mp4")
