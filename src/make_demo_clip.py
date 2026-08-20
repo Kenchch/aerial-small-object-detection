@@ -38,6 +38,10 @@ import hashlib
 import json
 from pathlib import Path
 
+# cv2.CAP_PROP_FPS, spelled out so probe_clip's signature and its tests do not
+# drag OpenCV in. The value is fixed by the OpenCV ABI.
+CAP_PROP_FPS = 5
+
 # cv2/numpy/ultralytics are imported inside the functions that use them, after
 # parse_args(). At module scope they pin `--help` to a fully provisioned
 # environment, which makes the CLI undiscoverable exactly when someone is
@@ -58,6 +62,104 @@ def provenance_path(out: Path) -> Path:
     """Where this clip's provenance sits. Named from the clip, so the pair
     cannot drift apart, and so track.py can find it without being told."""
     return out.with_suffix(".provenance.json")
+
+
+def probe_clip(path: Path, open_capture=None) -> dict:
+    """Decode the finished file and report what is ACTUALLY in it.
+
+    Everything else here describes what was handed to the encoder. That is not
+    the same thing: a VideoWriter can accept every frame and write fewer, or
+    write a file that will not decode, and both look like success from the
+    writing side. Reading it back is the only way to find out, and it is one
+    pass over a few megabytes.
+
+    Returns frames, width, height, fps and a digest of the DECODED pixels -
+    which is what any consumer of the published clip can recompute for
+    themselves, without having the generator or its source frame.
+
+    `open_capture` is injected so this is testable without OpenCV, which CI
+    deliberately does not install.
+    """
+    import hashlib as _hashlib
+
+    if open_capture is None:  # pragma: no cover - the real path needs cv2
+        import cv2
+
+        open_capture = cv2.VideoCapture
+
+    cap = open_capture(str(path))
+    try:
+        if not cap.isOpened():
+            raise SystemExit(f"{path} was written but cannot be decoded")
+        digest = _hashlib.sha256()
+        n = 0
+        width = height = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            n += 1
+            height, width = frame.shape[:2]
+            digest.update(memoryview(frame).tobytes())
+        fps = cap.get(CAP_PROP_FPS)
+    finally:
+        cap.release()
+    return {
+        "frames": n,
+        "width": width,
+        "height": height,
+        "fps": round(fps, 3) if fps else None,
+        "decoded_frames_sha256": digest.hexdigest(),
+    }
+
+
+def check_encoded(probe: dict, *, frames: int, width: int, height: int) -> None:
+    """The file has to contain what we thought we wrote.
+
+    A VideoWriter accepts frames and reports nothing; a codec that drops the
+    last few, or a container the muxer finalised badly, produces a shorter or
+    unreadable clip while the script prints the frame count it INTENDED. The
+    tracking profile downstream then reports on however many frames it found,
+    with no indication that some were missing.
+
+    fps is deliberately not compared: containers store it as a rational and
+    round-trip 15 as 15.0 or 14.999, so an equality check there fails on
+    healthy files.
+    """
+    mismatches = [
+        f"{name}: wrote {expected}, file has {probe[name]}"
+        for name, expected in (
+            ("frames", frames),
+            ("width", width),
+            ("height", height),
+        )
+        if probe[name] != expected
+    ]
+    if mismatches:
+        raise SystemExit(
+            "the encoded clip does not match what was written - "
+            + "; ".join(mismatches)
+        )
+
+
+def publish_staged(staged: Path, out: Path, checks) -> None:
+    """Move the staged clip into place, but only if every digest agrees.
+
+    `checks` is (label, actual, expected); an expected of None is not checked.
+
+    This is the whole point of staging. Writing straight to --out destroyed the
+    published clip before anything had established that the replacement was the
+    same clip - and since the sidecar was then written from whatever had just
+    been produced, it always agreed with itself and "verified" meant nothing.
+    """
+    for label, actual, expected in checks:
+        if expected and actual != expected:
+            staged.unlink(missing_ok=True)
+            raise SystemExit(
+                f"{label} sha256 is {actual}, not {expected}. The existing "
+                f"{out.name} and its provenance are untouched."
+            )
+    staged.replace(out)
 
 
 def densest_val_image() -> tuple[Path, int]:
@@ -113,12 +215,19 @@ def main() -> None:
         "and 'verified' means nothing.",
     )
     p.add_argument(
-        "--expected-frames-sha256",
+        "--expected-decoded-frames-sha256",
         default=None,
-        help="Same, over the DECODED frame bytes rather than the "
-        "container. Encoder-independent, so it still holds across "
-        "FFmpeg and OpenCV versions that pack identical pixels "
-        "into different mp4 bytes.",
+        help="Same, over the frames DECODED BACK from the finished "
+        "file. Independent of how the container was muxed, and "
+        "the one digest a consumer can recompute from the "
+        "published clip alone.",
+    )
+    p.add_argument(
+        "--expected-pre-encode-frames-sha256",
+        default=None,
+        help="Same, over the frames handed TO the encoder. This one "
+        "is codec-independent: it says the generator produced the "
+        "same pixels, whatever the encoder then did with them.",
     )
     p.add_argument(
         "--crop",
@@ -209,48 +318,62 @@ def main() -> None:
         )
 
     max_dx, max_dy = W - cw, H - ch
-    # Hashed as the frames are produced. The container digest identifies these
-    # exact mp4 bytes; this identifies the PIXELS, which is the thing that
-    # actually has to match. Two FFmpeg builds can pack identical frames into
-    # different files, and then a byte comparison says "different clip" about
-    # a clip that is not different.
-    frames_digest = hashlib.sha256()
+    # Hashed on the way IN, before the encoder sees them. This is the
+    # codec-independent identity: it says the generator produced the same
+    # pixels, whatever mp4v then did with them. It is NOT the same thing as
+    # the frames you get back out - see probe_clip.
+    pre_encode = hashlib.sha256()
     try:
-        for i in range(args.frames):
-            t = i / max(1, args.frames - 1)
-            # Ease-in-out so the pan accelerates and settles like real gimbal
-            # motion rather than starting and stopping instantaneously.
-            e = 0.5 - 0.5 * np.cos(np.pi * t)
-            x = int(e * max_dx)
-            y = int((0.5 - 0.5 * np.cos(2 * np.pi * t)) * max_dy)  # vertical sweep
-            crop = img[y : y + ch, x : x + cw][:oh, :ow]
-            frames_digest.update(np.ascontiguousarray(crop).tobytes())
-            writer.write(crop)
-    finally:
-        # The writer holds an OS handle and, on Windows, a lock on the file. A
-        # failure mid-loop used to leave both to the garbage collector, so the
-        # obvious next step - delete the half-written file and retry - failed
-        # for a second, unrelated-looking reason.
-        writer.release()
+        try:
+            for i in range(args.frames):
+                t = i / max(1, args.frames - 1)
+                # Ease-in-out so the pan accelerates and settles like real
+                # gimbal motion rather than starting and stopping instantly.
+                e = 0.5 - 0.5 * np.cos(np.pi * t)
+                x = int(e * max_dx)
+                y = int((0.5 - 0.5 * np.cos(2 * np.pi * t)) * max_dy)
+                crop = img[y : y + ch, x : x + cw][:oh, :ow]
+                pre_encode.update(np.ascontiguousarray(crop).tobytes())
+                writer.write(crop)
+        finally:
+            # Released before anything tries to touch the file: the writer
+            # holds an OS handle and, on Windows, a lock, so unlinking first
+            # fails for a second, unrelated-looking reason.
+            writer.release()
 
-    clip_sha, frames_sha = sha256(staged), frames_digest.hexdigest()
+        # Read the file back. Everything above describes what was handed to the
+        # encoder, which is not what is in the file - a VideoWriter can accept
+        # every frame and write fewer, and that looks like success from the
+        # writing side. The tracking profile downstream would then report on
+        # however many frames it found, with nothing saying some were missing.
+        probe = probe_clip(staged)
+        check_encoded(probe, frames=args.frames, width=ow, height=oh)
 
-    # Checked BEFORE the published clip is replaced. Without this the sidecar
-    # was written from whatever had just been produced, so it always agreed
-    # with itself: regenerate a different clip and the record simply recorded
-    # the different clip, and every downstream "matches" was a tautology.
-    for label, actual, expected in (
-        ("clip", clip_sha, args.expected_clip_sha256),
-        ("frame content", frames_sha, args.expected_frames_sha256),
-    ):
-        if expected and actual != expected:
-            staged.unlink(missing_ok=True)
-            raise SystemExit(
-                f"{label} sha256 is {actual}, not {expected}. The existing "
-                f"{args.out.name} and its provenance are untouched."
-            )
+        publish_staged(
+            staged,
+            args.out,
+            (
+                ("clip", sha256(staged), args.expected_clip_sha256),
+                (
+                    "decoded frame",
+                    probe["decoded_frames_sha256"],
+                    args.expected_decoded_frames_sha256,
+                ),
+                (
+                    "pre-encode frame",
+                    pre_encode.hexdigest(),
+                    args.expected_pre_encode_frames_sha256,
+                ),
+            ),
+        )
+    except BaseException:
+        # Any failure at all leaves nothing behind. Without this the aborted
+        # run left demo_pan.tmp.mp4 sitting in reports/ - a partial clip with a
+        # plausible name, for the next person to wonder about.
+        staged.unlink(missing_ok=True)
+        raise
 
-    staged.replace(args.out)
+    clip_sha = sha256(args.out)
 
     # The clip is not in the repo - it is 6.5 MB of build output - so "re-run
     # make_demo_clip.py" is not by itself a way to get the same clip back.
@@ -265,13 +388,19 @@ def main() -> None:
         "clip": {
             "path": args.out.name,
             "sha256": clip_sha,
-            # Encoder-independent identity: the decoded pixels, in order.
-            # The container digest is what changes when FFmpeg does.
-            "frames_sha256": frames_sha,
-            "frames": args.frames,
+            # Two frame digests, because they answer different questions.
+            # decoded_ is what a consumer can recompute from the published
+            # clip alone, and survives a remux. pre_encode_ is what the
+            # generator produced before the codec touched it, and survives a
+            # change of codec. Neither survives both.
+            "decoded_frames_sha256": probe["decoded_frames_sha256"],
+            "pre_encode_frames_sha256": pre_encode.hexdigest(),
+            # Read back from the finished file, not assumed from the arguments.
+            "frames": probe["frames"],
             "fps": args.fps,
-            "width": ow,
-            "height": oh,
+            "container_fps": probe["fps"],
+            "width": probe["width"],
+            "height": probe["height"],
         },
         "generator": {
             "script": "src/make_demo_clip.py",
@@ -311,7 +440,8 @@ def main() -> None:
     print(f"wrote  : {args.out}  ({args.frames} frames @ {args.fps} fps, {ow}x{oh})")
     print(f"         {provenance_path(args.out).name}")
     print(f"clip   : sha256 {clip_sha}")
-    print(f"frames : sha256 {frames_sha}")
+    print(f"decoded: sha256 {probe['decoded_frames_sha256']}")
+    print(f"verified {probe['frames']} frames, {probe['width']}x{probe['height']}")
     print(
         "\nNOTE: synthetic camera motion over a real frame. Validates the "
         "pipeline;\n      it is not a tracking accuracy benchmark. See module "

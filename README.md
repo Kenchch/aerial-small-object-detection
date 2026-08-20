@@ -255,37 +255,40 @@ moving objects or occlusion, so track-continuity numbers below describe the
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 1.14 ms | 1.25 ms |
-| detect + track | 31.79 ms | **97.84 ms** |
-| ├ preprocess | 5.82 ms | |
-| ├ forward | 12.36 ms | |
-| ├ postprocess (NMS) | 1.69 ms | |
-| └ association + overhead | 11.32 ms | |
-| annotate | 2.97 ms | 3.37 ms |
-| encode | 2.37 ms | 2.49 ms |
-| open + flush (once per run) | | 0.112 ms |
-| **accounted** | | **105.06 ms** |
-| **wall per frame** | | **105.13 ms** |
+| decode | 0.95 ms | 1.11 ms |
+| detect + track | 32.26 ms | **159.3 ms** |
+| ├ preprocess | 4.96 ms | |
+| ├ forward | 14.14 ms | |
+| ├ postprocess (NMS) | 1.68 ms | |
+| └ association + overhead | 11.23 ms | |
+| annotate | 2.92 ms | 3.74 ms |
+| encode | 2.3 ms | 2.52 ms |
+| open + flush (once per run) | | 0.109 ms |
+| **accounted** | | **166.79 ms** |
+| **wall per frame** | | **166.87 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 31.19 against 31.79 here. That is the honest form: the frame
+parent median — 32.01 against 32.26 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
 for nearly all of wall-clock time.
 
 **One run, on a thermally-limited GPU.** Re-running this on the same machine
-over one session produced forward-pass medians of 12.4, 12.5, 12.5, 13.1, 14.5
-and 16.3 ms — a ±14 % spread driven by how hot the card already was, with the
-slowest immediately after a benchmark run and the three fastest from cold. The
+over one session produced forward-pass medians of 12.4, 12.5, 12.5, 13.1, 14.1,
+14.5 and 16.3 ms — a ±14 % spread driven by how hot the card already was, with
+the slowest immediately after a benchmark run. The cold-start cost moves far
+more: the first frame ranged 5.6 s to 11.2 s across the same runs, so the
+`warmup_penalty_x` below is the least stable number in the report and is worth
+reading as an order of magnitude rather than a measurement. The
 committed profile is a cold-start run, which is the protocol the benchmark
 section states, but the figures here should be read as one sample from that
 range rather than a stable measurement. The *ratios* between stages are far
 steadier than the absolute milliseconds, and they are what the argument below
 rests on.
 
-**`detect + track` (31.79 ms) is not the same measurement as the 11.74 ms
-PyTorch core row in the backend table above, and the 20.05 ms between them is the
+**`detect + track` (32.26 ms) is not the same measurement as the 11.74 ms
+PyTorch core row in the backend table above, and the 20.52 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -295,29 +298,31 @@ above, taken from Ultralytics' `Results.speed`, are where that time goes.
 reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
-**The forward pass is 39 % of this stage. Preprocessing and association are
-another 54 %,** and neither is affected by the export format. That is the
+**The forward pass is 44 % of this stage. Preprocessing and association are
+another 50 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.47 ms on the forward pass, while 19.43 ms per frame sits in the
+buys 2.47 ms on the forward pass, while 18.12 ms per frame sits in the
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.74 → 12.36 ms difference on the forward pass itself is
+The remaining 11.74 → 14.14 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,918 ms — 186× the steady-state 31.79 ms**, which is cold-start
+frame costs **11,248 ms — 349× the steady-state 32.26 ms**, which is cold-start
 initialisation: the CUDA context and cuDNN's autotuning, plus Ultralytics
 building its predictor and the ByteTrack instance, both of which are
 constructed lazily on the first `model.track()` call. It is not attributed to
 CUDA alone because it has not been broken down — what the profile shows is that
-the first frame costs this, not which part of it costs what. Amortised over 90 frames that is most of the
-gap between the mean (97.84 ms) and the median (31.79 ms), which is why this
-clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
+the first frame costs this, not which part of it costs what.
+
+Amortised over 90 frames that is most of the gap between the mean (159.3 ms)
+and the median (32.26 ms), which is why this
+clip's end-to-end throughput (**6.0 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.27 ms/frame → 26.1 FPS**, not the ~31 FPS a detect+track-only
+— which gives **38.43 ms/frame → 26.0 FPS**, not the ~31 FPS a detect+track-only
 figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
 distinction matters for short-clip batch processing versus a long-running
 stream.
@@ -583,11 +588,23 @@ python src/track.py --weights runs/n_1024/weights/best.pt --source reports/demo_
 
 The second digest is the one that matters. Without it the sidecar is written
 from whatever clip was just produced, so it always agrees with itself and
-"verified" means nothing. With it, a clip that comes out different is refused
-and the published `demo_pan.mp4` and its provenance are left untouched. The
-record also carries `frames_sha256` over the decoded pixels
-(`--expected-frames-sha256`), which survives FFmpeg and OpenCV versions that
-pack identical frames into different container bytes.
+"verified" means nothing. With it, a clip that comes out different is refused,
+and the published `demo_pan.mp4` and its provenance are left untouched.
+
+The record carries **two** frame digests, because they answer different
+questions and neither answers both:
+
+| digest | over | survives | flag |
+| --- | --- | --- | --- |
+| `decoded_frames_sha256` | frames read back **out of the finished file** | a remux — different container bytes, same pixels | `--expected-decoded-frames-sha256` |
+| `pre_encode_frames_sha256` | frames handed **to the encoder** | a change of codec — the generator made the same pixels | `--expected-pre-encode-frames-sha256` |
+
+The decoded one is the only digest a consumer can recompute from the published
+clip alone, without the source frame or the generator. Reading the file back is
+also what catches an encoder that accepts ninety frames and writes eighty-seven
+— a `VideoWriter` reports nothing when it does — so the frame count and
+dimensions in the record are measured from the file rather than assumed from
+the arguments.
 
 `src/track.py` compares the source against that record **before it loads the
 model**, and stops if they disagree - profiling ninety frames to be told

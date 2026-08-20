@@ -2,9 +2,11 @@
   "clip": {
     "path": "demo_pan.mp4",
     "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
-    "frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
+    "decoded_frames_sha256": "cde22530791770440b830cf4a47ed7acc1b0287e39c257e524dce3cc8f37a658",
+    "pre_encode_frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
     "frames": 90,
     "fps": 15,
+    "container_fps": 15.0,
     "width": 842,
     "height": 474
   },
