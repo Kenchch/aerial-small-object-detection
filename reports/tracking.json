@@ -1,40 +1,40 @@
 {
   "frames": 90,
-  "wall_s": 9.46,
-  "end_to_end_fps": 9.5,
-  "per_frame_wall_ms": 105.13,
+  "wall_s": 15.02,
+  "end_to_end_fps": 6.0,
+  "per_frame_wall_ms": 166.87,
   "stage_ms_median": {
-    "decode": 1.14,
-    "detect_and_track": 31.79,
-    "annotate": 2.97,
-    "encode": 2.37
+    "decode": 0.95,
+    "detect_and_track": 32.26,
+    "annotate": 2.92,
+    "encode": 2.3
   },
   "open_and_flush_ms": {
-    "setup": 9.07,
-    "flush": 1.04,
-    "amortised_per_frame": 0.112
+    "setup": 8.89,
+    "flush": 0.96,
+    "amortised_per_frame": 0.109
   },
   "stage_ms_mean": {
-    "decode": 1.25,
-    "detect_and_track": 97.84,
-    "annotate": 3.37,
-    "encode": 2.49
+    "decode": 1.11,
+    "detect_and_track": 159.3,
+    "annotate": 3.74,
+    "encode": 2.52
   },
   "detect_and_track_ms_median": {
-    "preprocess": 5.82,
-    "forward": 12.36,
-    "postprocess_nms": 1.69,
-    "association_and_overhead": 11.32
+    "preprocess": 4.96,
+    "forward": 14.14,
+    "postprocess_nms": 1.68,
+    "association_and_overhead": 11.23
   },
   "warmup": {
-    "first_frame_ms": 5917.6,
-    "steady_state_ms": 31.79,
-    "warmup_penalty_x": 186.1
+    "first_frame_ms": 11248.3,
+    "steady_state_ms": 32.26,
+    "warmup_penalty_x": 348.7
   },
   "reconciliation": {
-    "accounted_mean_ms": 105.06,
-    "unaccounted_ms": 0.07,
-    "coverage_pct": 99.9
+    "accounted_mean_ms": 166.79,
+    "unaccounted_ms": 0.08,
+    "coverage_pct": 100.0
   },
   "tracks": {
     "unique_ids": 306,
@@ -69,9 +69,11 @@
       "clip": {
         "path": "demo_pan.mp4",
         "sha256": "ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b",
-        "frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
+        "decoded_frames_sha256": "cde22530791770440b830cf4a47ed7acc1b0287e39c257e524dce3cc8f37a658",
+        "pre_encode_frames_sha256": "9787a8cb7b08dbf05146394bf2acfeb87c56a794f282d4a85f7a9d6ba405ab19",
         "frames": 90,
         "fps": 15,
+        "container_fps": 15.0,
         "width": 842,
         "height": 474
       },
