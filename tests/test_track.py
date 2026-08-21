@@ -421,6 +421,17 @@ def _stub_modules(monkeypatch, *, frames_in, frames_back, opened=True):
 
     monkeypatch.setattr(track, "frame_source", _frames)
 
+    # torch too: CI deliberately does not install it, and _environment()
+    # imports it to record the device. Without this the test passes locally and
+    # fails in exactly the environment the bare-clone guarantee is about.
+    torch = types.ModuleType("torch")
+    torch.__version__ = "0.0-stub"
+    torch.version = types.SimpleNamespace(cuda=None)
+    torch.cuda = types.SimpleNamespace(
+        is_available=lambda: False, get_device_name=lambda i: None
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
     ultra = types.ModuleType("ultralytics")
 
     class _Res:
