@@ -317,9 +317,9 @@ constructed lazily on the first `model.track()` call. It is not attributed to
 CUDA alone because it has not been broken down — what the profile shows is that
 the first frame costs this, not which part of it costs what.
 
-Amortised over 90 frames that is most of the gap between the mean (159.3 ms)
-and the median (32.26 ms), which is why this
-clip's end-to-end throughput (**9.5 FPS**) is well below its steady-state rate.
+Amortised over 90 frames that is most of the gap between the mean (97.93 ms)
+and the median (32.21 ms), which is why this clip's end-to-end throughput
+(**9.5 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
 — which gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a detect+track-only
@@ -364,7 +364,11 @@ Even at the correct batch size, decoding full-resolution JPEGs (up to
 2000×1500) every epoch — 6,471 of them — kept the dataloader, not the GPU,
 as the limiting factor.
 `cache='disk'` pre-decodes each image to `.npy` once and reads that back on
-subsequent epochs, taking epochs from ~5 minutes to ~60 seconds.
+subsequent epochs. That was measured while diagnosing the dataloader stall at
+640px, where it took epochs from ~5 minutes to ~60 seconds — it is not a claim
+about the published run, which was already on `cache: disk` throughout
+(`runs/n_1024/args.yaml`) and averaged 3.95 min/epoch at 1024px, where the GPU
+is the limiting factor again.
 
 ### CUDA version pinning
 
@@ -512,7 +516,7 @@ docker run --gpus all \
 docker run --gpus all \
   -v "$PWD/datasets:/workspace/datasets" \
   -v "$PWD/runs:/workspace/runs" \
-  aerial-detection src/train.py --model yolo11n.pt --imgsz 1024 --batch 6 --name n_1024
+  aerial-detection src/train.py --model yolo11n.pt --imgsz 1024 --batch 6     --name n_1024_rerun
 ```
 
 The dataset is mounted at `/data`, and the image carries
@@ -563,7 +567,11 @@ file profiled is the file that record describes.
 # Train (1024px, chosen from the label-size distribution above).
 # --batch 6, not the default 16: at 1024px, activation memory per image is
 # high enough that batch 16 does not fit in 8 GB VRAM.
-python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --batch 6 --name n_1024
+# --name: runs/n_1024/ is COMMITTED (args.yaml, results.csv, the plots), and
+# train.py refuses to write into an existing run directory, so retraining
+# under that name needs --overwrite and will replace the published evidence.
+# Pick a new name unless that is what you want.
+python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --batch 6   --name n_1024_rerun
 
 # Per-class metrics + ground-truth object-size distribution
 # -> reports/evaluation.json

@@ -351,3 +351,31 @@ def test_a_profile_that_saw_no_nodes_is_not_treated_as_success():
                 "all_on_cuda": False,
             }
         )
+
+
+def test_a_perfectly_classified_column_has_no_top_confusion():
+    """max() over a generator returns its FIRST element when every value ties.
+
+    An all-zero off-diagonal column - a class nothing was confused with - was
+    therefore reported as "mostly confused with <whichever class is listed
+    first>". `default=` only fires for an EMPTY sequence, which this never is,
+    so it never caught it. Latent on the committed data, where all ten columns
+    have real confusion.
+    """
+    names = {0: "car", 1: "bus", 2: "truck"}
+    # Column 1 (bus) is perfect: every bus was called a bus.
+    cm = np.array(
+        [
+            [8.0, 0.0, 3.0],
+            [2.0, 5.0, 1.0],
+            [1.0, 0.0, 9.0],
+            [0.0, 0.0, 0.0],  # background row
+        ]
+    )
+    table = error_split(cm, names)
+
+    assert table["bus"]["top_confusion"] is None
+    assert table["bus"]["correct"] == 1.0
+    # The classes that DO have confusion still name it.
+    assert table["car"]["top_confusion"] == "bus"
+    assert table["truck"]["top_confusion"] == "car"

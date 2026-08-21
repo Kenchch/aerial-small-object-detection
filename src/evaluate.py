@@ -53,19 +53,21 @@ def error_split(cm, names: dict) -> dict:
         if not col[j]:
             continue
         correct = cm[j, j] / col[j]
+        # None when nothing was confused with this class. max() over a
+        # generator returns its FIRST element when every value ties, so an
+        # all-zero column - a perfectly classified class - reported whichever
+        # class happened to come first as its "top confusion". `default` only
+        # fires for an empty sequence, which this never is.
+        worst_name, worst_share = max(
+            ((n2, cm[i, j] / col[j]) for i, n2 in enumerate(names.values()) if i != j),
+            key=lambda kv: kv[1],
+            default=(None, 0.0),
+        )
         out[name] = {
             "correct": round(float(correct), 3),
             "missed_as_background": round(float(cm[-1, j] / col[j]), 3),
             "misclassified": round(float(cm[:-1, j].sum() / col[j] - correct), 3),
-            "top_confusion": max(
-                (
-                    (n2, cm[i, j] / col[j])
-                    for i, n2 in enumerate(names.values())
-                    if i != j
-                ),
-                key=lambda kv: kv[1],
-                default=(None, 0.0),
-            )[0],
+            "top_confusion": worst_name if worst_share > 0 else None,
         }
     return out
 

@@ -375,7 +375,7 @@ def main() -> None:
 
     clip_sha = sha256(args.out)
 
-    # The clip is not in the repo - it is 6.5 MB of build output - so "re-run
+    # The clip is not in the repo - it is build output - so "re-run
     # make_demo_clip.py" is not by itself a way to get the same clip back.
     # densest_val_image() picks by label count, which depends on which dataset
     # revision is on the machine, and the crop, pan and fps are all arguments.

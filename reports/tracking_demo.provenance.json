@@ -1,7 +1,7 @@
 {
   "gif": {
     "path": "tracking_demo.gif",
-    "sha256": "e1bca429c0af459f23357afdbd9e0926495d8a1360bbcf1f05eb9e92bc5af31b",
+    "sha256": "87f9e5b463da551f9a2cadf40d78dc577f8a2f410aafd160ecc33c1cb490020c",
     "frames": 30,
     "fps": 10,
     "width": 480

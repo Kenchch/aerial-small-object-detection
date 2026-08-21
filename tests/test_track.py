@@ -346,3 +346,171 @@ def test_an_output_at_the_wrong_size_is_refused():
 def test_a_complete_output_passes():
     probe = track.probe_video(Path("x"), open_capture=lambda _: _Cap(_fake_frames(90)))
     track.check_output(probe, frames=90, width=8, height=4, name="track_out.mp4")
+
+
+# --- the staged output leaves nothing behind -------------------------------- #
+
+
+def _stub_modules(monkeypatch, *, frames_in, frames_back, opened=True):
+    """Put stand-in cv2 / ultralytics modules in sys.modules.
+
+    main() imports both inside itself, so this substitutes them for the
+    duration of the call and the PRODUCTION code path is what runs - not a
+    copy of it written in the test.
+    """
+    import sys
+    import types
+
+    import numpy as np
+
+    made = {}
+
+    class _Writer:
+        def __init__(self, path):
+            self.path = Path(path)
+            self.path.write_bytes(b"staged output")
+
+        def isOpened(self):
+            return True
+
+        def write(self, frame):
+            pass
+
+        def release(self):
+            made["released"] = True
+
+    class _Cap:
+        """Playback of the WRITTEN file, for probe_video's read-back."""
+
+        def __init__(self):
+            self._left = list(range(frames_back))
+
+        def isOpened(self):
+            return opened
+
+        def read(self):
+            if not self._left:
+                return False, None
+            self._left.pop()
+            return True, np.zeros((4, 8, 3), dtype=np.uint8)
+
+        def get(self, prop):
+            return 15.0
+
+        def release(self):
+            pass
+
+    cv2 = types.ModuleType("cv2")
+    cv2.__version__ = "5.0.0-stub"
+    cv2.FONT_HERSHEY_SIMPLEX = 0
+    cv2.LINE_AA = 16
+    cv2.INTER_AREA = 3
+    cv2.CAP_PROP_FPS = track.CAP_PROP_FPS
+    cv2.CAP_PROP_FRAME_WIDTH = 3
+    cv2.CAP_PROP_FRAME_HEIGHT = 4
+    cv2.VideoWriter_fourcc = lambda *a: 0
+    cv2.VideoWriter = lambda path, *a: made.setdefault("writer", _Writer(path))
+    cv2.VideoCapture = lambda _: _Cap()
+    cv2.rectangle = cv2.putText = lambda *a, **k: None
+    cv2.getTextSize = lambda *a, **k: ((10, 10), 0)
+
+    def _frames(source):
+        yield None, 15.0, (8, 4)
+        for _ in range(frames_in):
+            yield np.zeros((4, 8, 3), dtype=np.uint8), None, None
+
+    monkeypatch.setattr(track, "frame_source", _frames)
+
+    ultra = types.ModuleType("ultralytics")
+
+    class _Res:
+        def __init__(self):
+            self.speed = {"preprocess": 1.0, "inference": 1.0, "postprocess": 1.0}
+            self.boxes = None
+
+    ultra.YOLO = lambda *a, **k: type(
+        "M", (), {"track": lambda self, *a, **k: [_Res()], "names": {}}
+    )()
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    monkeypatch.setitem(sys.modules, "ultralytics", ultra)
+    return made
+
+
+def _run(monkeypatch, tmp_path, **kw):
+    import sys
+
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"a source clip")
+    out = tmp_path / "track_out.mp4"
+    made = _stub_modules(monkeypatch, **kw)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["track.py", "--weights", "w.pt", "--source", str(source), "--out", str(out)],
+    )
+    return source, out, made
+
+
+def test_a_source_with_no_frames_leaves_no_staged_output(tmp_path, monkeypatch):
+    """`no frames read` sat outside every cleanup guard.
+
+    The writer had already created <out>.tmp.mp4 by then, so the exit left a
+    partial mp4 under a plausible name with no report describing it - exactly
+    the leak make_demo_clip.py has a test for.
+    """
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=0, frames_back=0)
+
+    with pytest.raises(SystemExit, match="no frames read"):
+        track.main()
+
+    assert not (tmp_path / "track_out.tmp.mp4").exists(), "the staged output survived"
+    assert not out.exists()
+
+
+def test_an_undecodable_output_leaves_no_staged_output(tmp_path, monkeypatch):
+    """probe_video raises when the written file will not decode, and that call
+    was above the try that cleans up."""
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=3, frames_back=0, opened=False)
+
+    with pytest.raises(SystemExit, match="cannot be decoded"):
+        track.main()
+
+    assert not (tmp_path / "track_out.tmp.mp4").exists(), "the staged output survived"
+    assert not out.exists()
+
+
+def test_a_truncated_output_leaves_the_previous_one_untouched(tmp_path, monkeypatch):
+    """The control: this path was already guarded, and must stay that way."""
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=5, frames_back=3)
+    out.write_bytes(b"the previous run's output")
+
+    with pytest.raises(SystemExit, match="processed 5, file has 3"):
+        track.main()
+
+    assert not (tmp_path / "track_out.tmp.mp4").exists()
+    assert out.read_bytes() == b"the previous run's output"
+
+
+def test_a_failing_report_write_leaves_no_staged_output(tmp_path, monkeypatch):
+    """The guard has to cover the report write and the publish too.
+
+    Moving the publish to after the report write - so the video is never newer
+    than the report describing it - would otherwise have opened a third leak in
+    the same place the first two were just closed.
+    """
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
+
+    real = Path.write_text
+
+    def boom(self, *a, **k):
+        if self.name == "tracking.json":
+            raise OSError("no space left on device")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", boom)
+
+    with pytest.raises(OSError, match="no space"):
+        track.main()
+
+    assert not (tmp_path / "track_out.tmp.mp4").exists(), "the staged output survived"
+    assert not out.exists(), "the video was published without a report"

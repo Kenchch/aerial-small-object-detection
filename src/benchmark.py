@@ -241,11 +241,19 @@ def check_placement(placement: dict, allow_cpu_fallback: bool = False) -> None:
     """
     if placement.get("all_on_cuda") or allow_cpu_fallback:
         return
+    # The message says exactly where the placement can be read, because this
+    # exception escapes main() before --out is written. It previously claimed
+    # "the placement is recorded in the output either way", which sent a
+    # reader to reports/benchmark.json - a file still holding the PREVIOUS
+    # run, asserting all_on_cuda: true. The report would have contradicted the
+    # run that had just failed, and the message was what pointed there.
     raise SystemExit(
         f"{placement.get('cpu_fallback_nodes')} of {placement.get('nodes_total')} "
         f"nodes ran on the CPU: {placement.get('by_provider')}. Those numbers "
-        f"would be published under a CUDA label. Pass --allow-cpu-fallback to "
-        f"measure it anyway - the placement is recorded in the output either way."
+        f"would be published under a CUDA label, so nothing was written: the "
+        f"existing report still describes the previous run. The placement is "
+        f"above and in this message. Pass --allow-cpu-fallback to measure and "
+        f"publish it anyway."
     )
 
 
