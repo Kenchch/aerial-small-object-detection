@@ -113,7 +113,17 @@ def main() -> None:
             if i % args.every == 0:
                 h, w = frame.shape[:2]
                 height = int(h * args.width / w)
-                small = cv2.resize(frame, (args.width, height), cv2.INTER_AREA)
+                # interpolation= by KEYWORD. cv2.resize's third positional
+                # parameter is `dst`, not `interpolation`, so passing the
+                # constant positionally handed it to `dst`, where OpenCV
+                # discarded it without complaint and used the default
+                # INTER_LINEAR. Bilinear point-sampling on a 1.75x
+                # reduction aliases exactly the few-pixel objects and
+                # 2-px track boxes this figure exists to show; INTER_AREA
+                # averages the source pixels instead.
+                small = cv2.resize(
+                    frame, (args.width, height), interpolation=cv2.INTER_AREA
+                )
                 frames.append(
                     Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)).quantize(
                         colors=args.colours, method=Image.Quantize.MEDIANCUT
