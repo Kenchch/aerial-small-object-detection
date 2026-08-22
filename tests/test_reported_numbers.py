@@ -208,3 +208,61 @@ def test_the_output_digest_ties_the_gif_to_the_tracking_run():
     gif = _json("tracking_demo.provenance.json")
     assert TRACKING["output"]["sha256"] == gif["source"]["sha256"]
     assert README.count(TRACKING["output"]["sha256"][:16]) >= 1
+
+
+# --- the error split, and the operating point it is meaningless without ------ #
+
+
+def test_the_error_split_table_matches_and_states_its_threshold():
+    """The README's central accuracy conclusion, pinned to the JSON.
+
+    This table had no guard at all, and it was wrong: the split was computed
+    from the validator's confusion matrix, which ultralytics >= 8.4 builds at
+    args.conf = 0.001. At that threshold the matrix is assembled from up to
+    max_det=300 boxes per image against ~71 real objects, and its matching is
+    class-agnostic, IoU-only and greedy on IoU - so sub-threshold junk won
+    ground-truth boxes out of "missed" and into "misclassified". Seven of ten
+    classes looked misclassification-limited; at the deployed threshold one is.
+    """
+    accuracy = _json("evaluation.json")["accuracy"]
+    split = accuracy["error_split"]
+
+    # The split is only interpretable at a stated operating point.
+    assert accuracy["error_split_conf"] == 0.25
+    assert accuracy["error_split_iou"] == 0.45
+    assert "conf = 0.25" in README
+
+    for name, row in split.items():
+        cells = _one(
+            rf"\| {re.escape(name)} \| \*?\*?([\d.]+)\*?\*? \| \*?\*?([\d.]+)\*?\*? "
+            # The last cell is a CLASS NAME, not a number - without that the
+            # per-class P/R table above matches too, and it has the same row
+            # labels.
+            rf"\| \*?\*?([\d.]+)\*?\*? \| ([a-z-]+) \|"
+        )
+        assert float(cells[0]) == pytest.approx(row["correct"], abs=0.005)
+        assert float(cells[1]) == pytest.approx(row["missed_as_background"], abs=0.005)
+        assert float(cells[2]) == pytest.approx(row["misclassified"], abs=0.005)
+        assert cells[3] == row["top_confusion"]
+
+
+def test_the_dominant_error_mode_claim_is_recomputed_not_asserted():
+    """The sentence the whole section turns on, checked by counting."""
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    stated = _one(r"Misclassification outweighs missing for (\w+) of the ten")
+    split = _json("evaluation.json")["accuracy"]["error_split"]
+    actual = sum(
+        1 for r in split.values() if r["misclassified"] > r["missed_as_background"]
+    )
+    assert words[stated] == actual

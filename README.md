@@ -129,11 +129,12 @@ mAP50-95 (0.374 vs 0.198). What separates them is apparent size: a bus occupies
 tens of pixels from altitude, a pedestrian occupies a handful, and the
 label-scale table above is exactly where that prediction came from.
 
-The confusion matrix below isolates this. `pedestrian` is *classified* better
-than `bus` (0.52 of true instances correct, against 0.42) and still scores
-half the mAP50-95. Since mAP50-95 averages IoU thresholds from 0.5 to 0.95, a
-two-pixel boundary error on an 11 px box costs what it would not cost on a bus.
-The gap is localisation precision under scale, not recognition.
+The confusion matrix below isolates this. At the deployed threshold
+`pedestrian` and `bus` are recognised about equally well (0.42 of true
+instances correct against 0.44) and `pedestrian` still scores half the
+mAP50-95. Since mAP50-95 averages IoU thresholds from 0.5 to 0.95, a two-pixel
+boundary error on an 11 px box costs what it would not cost on a bus. The gap
+is localisation precision under scale, not recognition.
 
 ![Normalised confusion matrix on the val split](runs/n_1024/confusion_matrix_normalized.png)
 
@@ -146,35 +147,48 @@ modes are not distributed evenly.
 `reports/evaluation.json`, so the numbers below are citable rather than read
 off the image:
 
+Built at **conf = 0.25** — the threshold `src/track.py` deploys at — and
+recorded as `error_split_conf` beside the split itself. That is not the
+operating point of the P/R figures above, which need `conf → 0` or the PR
+curve is truncated, and the two must not be read as one measurement.
+
 | true class | correct | missed | misclassified | mostly as |
 | --- | --- | --- | --- | --- |
-| awning-tricycle | 0.14 | 0.25 | **0.61** | car |
-| van | 0.34 | 0.10 | **0.56** | car |
-| tricycle | 0.25 | 0.20 | **0.55** | motor |
-| truck | 0.35 | 0.17 | **0.48** | car |
-| bus | 0.42 | 0.18 | **0.40** | truck |
-| motor | 0.43 | 0.19 | **0.38** | bicycle |
-| bicycle | 0.23 | **0.41** | 0.36 | motor |
-| people | 0.29 | **0.36** | 0.35 | pedestrian |
-| car | 0.71 | 0.09 | **0.19** | van |
-| pedestrian | 0.52 | **0.29** | 0.19 | people |
+| van | 0.32 | 0.26 | **0.42** | car |
+| awning-tricycle | 0.11 | **0.55** | 0.34 | car |
+| truck | 0.32 | **0.42** | 0.25 | car |
+| bus | 0.44 | **0.36** | 0.20 | truck |
+| tricycle | 0.23 | **0.57** | 0.20 | motor |
+| bicycle | 0.11 | **0.75** | 0.14 | motor |
+| people | 0.24 | **0.66** | 0.10 | pedestrian |
+| motor | 0.36 | **0.57** | 0.07 | people |
+| pedestrian | 0.42 | **0.55** | 0.03 | people |
+| car | 0.77 | **0.21** | 0.02 | van |
 
-**Misclassification outweighs missing for seven of the ten classes**, so the
-dominant failure mode is not the one the resolution argument predicts. Only
-`pedestrian` is clearly missing-limited; `bicycle` and `people` are near-even.
-Everything else is being found and then labelled wrong.
+**Misclassification outweighs missing for one of the ten classes.** Missing
+dominates for the other nine — the model does not emit a box at all, at the
+threshold it would be deployed at.
 
-The confusions are not random. They collapse along two axes into the locally
-dominant class: the four-wheeled classes fall into `car` (42 % of training
-boxes), and the two-wheeled and pedestrian classes fall into each other. This
-is a fine-grained-distinction and class-balance problem, not a detection one,
-and more input pixels do not obviously address it.
+This reverses what this section used to claim, and the reason is worth stating.
+The split was previously computed from the validator's own confusion matrix,
+which ultralytics ≥ 8.4 builds at `args.conf = 0.001` (8.3.x clamped it to 0.25
+internally; 8.4 dropped the clamp). At 0.001 the matrix is assembled from up to
+`max_det = 300` boxes per image against ~71 real objects, and its matching is
+class-agnostic, IoU-only and greedy on IoU — confidence plays no part in it. So
+the sub-threshold junk tail wins ground-truth boxes that no deployment would
+ever see, moving them out of "missed" and into "misclassified". On that
+arithmetic seven of ten classes looked misclassification-limited; at the
+deployed threshold, one does.
 
-That narrows what the label-scale analysis actually supports. High recall loss
-on the smallest classes is real and consistent with training at 1024px rather
-than 640. But it does not follow that scale is *the* limiting factor overall —
-on this evidence, the larger share of the error budget is a labelling problem
-that a higher resolution would not have fixed.
+What survives is `van`, which is genuinely confused rather than missed
+(0.42 against 0.26), and it goes to `car` — as do
+`truck` and `awning-tricycle` for the share of their error that is confusion.
+The four-wheeled classes collapsing into `car` (42 % of training boxes) is
+real; it is just not the dominant error mode.
+
+The label-scale analysis therefore stands rather than being narrowed. High
+recall loss on the smallest classes is the largest single component of the
+error budget, and it is consistent with training at 1024px rather than 640.
 
 ---
 
@@ -432,12 +446,14 @@ backend ordering is the more portable half of the result, but one machine is
 one machine — nothing here has been measured on a second device, so treat the
 ordering as a finding about this hardware rather than a general one.
 
-**The dominant error mode is untouched by anything tried here.**
-Misclassification exceeds missed detections for seven of ten classes, mostly
-minority classes collapsing into `car`. Resolution, batch size and augmentation
-were the levers pulled in this project, and none of them target that. Class
-re-weighting, a merge of the near-duplicate categories, or a higher-capacity
-backbone would be the next experiments — none were run.
+**The dominant error mode is missed detection, and it is a recall problem.**
+At the deployed threshold the model fails to emit a box at all for most of the
+error budget on nine of ten classes; only `van` is confusion-limited, and
+it goes to `car`. Resolution was the lever pulled here and it is the right
+family of lever, but it was pulled once, at one value. Higher input resolution
+still, a lower deployment threshold traded against precision, more epochs (see
+below — training was budget-limited, not converged), and class re-weighting for
+the minority classes would be the next experiments. None were run.
 
 **Training was epoch-budget-limited, not converged.** `best.pt` is epoch 50 —
 the last epoch — and mAP50-95 was still rising when the budget ran out
