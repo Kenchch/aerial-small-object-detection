@@ -73,66 +73,68 @@
     "worst_class": "bicycle",
     "error_split": {
       "pedestrian": {
-        "correct": 0.518,
-        "missed_as_background": 0.291,
-        "misclassified": 0.191,
+        "correct": 0.418,
+        "missed_as_background": 0.549,
+        "misclassified": 0.033,
         "top_confusion": "people"
       },
       "people": {
-        "correct": 0.292,
-        "missed_as_background": 0.357,
-        "misclassified": 0.351,
+        "correct": 0.237,
+        "missed_as_background": 0.66,
+        "misclassified": 0.103,
         "top_confusion": "pedestrian"
       },
       "bicycle": {
-        "correct": 0.229,
-        "missed_as_background": 0.414,
-        "misclassified": 0.357,
+        "correct": 0.11,
+        "missed_as_background": 0.749,
+        "misclassified": 0.141,
         "top_confusion": "motor"
       },
       "car": {
-        "correct": 0.713,
-        "missed_as_background": 0.093,
-        "misclassified": 0.194,
+        "correct": 0.77,
+        "missed_as_background": 0.206,
+        "misclassified": 0.024,
         "top_confusion": "van"
       },
       "van": {
-        "correct": 0.341,
-        "missed_as_background": 0.101,
-        "misclassified": 0.558,
+        "correct": 0.318,
+        "missed_as_background": 0.261,
+        "misclassified": 0.421,
         "top_confusion": "car"
       },
       "truck": {
-        "correct": 0.347,
-        "missed_as_background": 0.171,
-        "misclassified": 0.483,
+        "correct": 0.324,
+        "missed_as_background": 0.423,
+        "misclassified": 0.253,
         "top_confusion": "car"
       },
       "tricycle": {
-        "correct": 0.252,
-        "missed_as_background": 0.199,
-        "misclassified": 0.549,
+        "correct": 0.229,
+        "missed_as_background": 0.572,
+        "misclassified": 0.199,
         "top_confusion": "motor"
       },
       "awning-tricycle": {
-        "correct": 0.135,
-        "missed_as_background": 0.25,
-        "misclassified": 0.615,
+        "correct": 0.107,
+        "missed_as_background": 0.551,
+        "misclassified": 0.342,
         "top_confusion": "car"
       },
       "bus": {
-        "correct": 0.422,
-        "missed_as_background": 0.179,
-        "misclassified": 0.398,
+        "correct": 0.438,
+        "missed_as_background": 0.359,
+        "misclassified": 0.203,
         "top_confusion": "truck"
       },
       "motor": {
-        "correct": 0.435,
-        "missed_as_background": 0.188,
-        "misclassified": 0.377,
-        "top_confusion": "bicycle"
+        "correct": 0.364,
+        "missed_as_background": 0.568,
+        "misclassified": 0.068,
+        "top_confusion": "people"
       }
-    }
+    },
+    "error_split_conf": 0.25,
+    "error_split_iou": 0.45
   },
   "label_scale": {
     "split": "val",

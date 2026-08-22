@@ -30,6 +30,22 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
+# The operating point the confusion matrix is built at. NOT a free choice: 0.25
+# is what src/track.py deploys at, and what Ultralytics' own ConfusionMatrix
+# uses as its default.
+#
+# It has to be passed explicitly because ultralytics >= 8.4 hands args.conf
+# straight to ConfusionMatrix.process_batch (models/yolo/detect/val.py), and
+# val's args.conf is 0.001 (engine/validator.py). 8.3.x clamped that internally
+# -- `self.conf = 0.25 if conf in {None, 0.001} else conf` -- and 8.4 dropped
+# the clamp. At 0.001 the matrix is built from up to max_det=300 boxes per
+# image against ~71 real objects, and its matching is class-agnostic, IoU-only
+# and greedy on IoU with confidence playing no part - so the sub-threshold junk
+# tail steals ground-truth boxes out of "missed" and into "misclassified",
+# which is exactly the comparison this report publishes.
+CONFUSION_CONF = 0.25
+CONFUSION_IOU = 0.45  # ConfusionMatrix.process_batch's own default
+
 
 def error_split(cm, names: dict) -> dict:
     """Decompose each true class's outcome into correct / missed / misclassified.
@@ -116,7 +132,18 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
     # plotted confusion matrix carries this, but reading it off the image is
     # error-prone -- the axes are Predicted x True and the interesting cells
     # are off-diagonal -- so emit it as numbers the README can cite directly.
-    confusion = error_split(m.confusion_matrix.matrix, names)
+    #
+    # A SECOND val pass, because the two numbers need different operating
+    # points and one call cannot serve both. mAP/P/R need conf -> 0 or the PR
+    # curve is truncated; a confusion matrix needs a threshold a deployment
+    # would actually run at, or "misclassified" counts boxes the model never
+    # emits. `m` above stays the accuracy source; only the matrix is taken from
+    # here, and this pass's own mAP is meaningless (a 0.25 floor cuts the curve
+    # off) and is deliberately discarded.
+    cm_metrics = model.val(
+        data=data, imgsz=imgsz, device=device, conf=CONFUSION_CONF, verbose=False
+    )
+    confusion = error_split(cm_metrics.confusion_matrix.matrix, names)
 
     worst = min(rows, key=lambda x: x[4])
     best = max(rows, key=lambda x: x[4])
@@ -143,6 +170,11 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
         "best_class": best[0],
         "worst_class": worst[0],
         "error_split": confusion,
+        # The threshold the split above is meaningless without. Recorded so a
+        # reader of reports/evaluation.json can see that these shares and the
+        # P/R beside them are not the same operating point.
+        "error_split_conf": CONFUSION_CONF,
+        "error_split_iou": CONFUSION_IOU,
     }
 
 
