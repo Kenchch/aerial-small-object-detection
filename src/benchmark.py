@@ -308,6 +308,18 @@ def export_onnx(weights: Path, onnx_path: Path, imgsz: int, exporter=None) -> No
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
     staged_weights = onnx_path.parent / weights.name
     copied = not staged_weights.exists() or not staged_weights.samefile(weights)
+    if copied and staged_weights.exists():
+        # Something else already lives at the staging path - same basename,
+        # different file. Do NOT copy over it: the `finally` below deletes this
+        # path, so the sequence would be "overwrite a stranger's file, then
+        # remove it". `best.pt` is ultralytics' default output name and is
+        # gitignored here, so the stranger is very often another checkpoint
+        # that only exists on disk.
+        raise FileExistsError(
+            f"{staged_weights} already exists and is not {weights}. The export "
+            f"stages the checkpoint there and deletes it afterwards, which "
+            f"would destroy that file. Point --cache-dir somewhere else."
+        )
     if copied:
         shutil.copy2(weights, staged_weights)
     try:
