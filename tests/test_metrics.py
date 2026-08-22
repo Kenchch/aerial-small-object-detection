@@ -302,6 +302,68 @@ def test_the_staged_copy_is_removed_even_when_the_export_fails(tmp_path):
     assert list(cache.iterdir()) == []
 
 
+def test_a_cache_dir_already_holding_that_filename_is_refused(tmp_path):
+    """The export stages the checkpoint under its own basename, then deletes it.
+
+    `best.pt` is ultralytics' default output name and is gitignored here, so
+    two different checkpoints called best.pt is the normal case, not a strange
+    one. Point --cache-dir at a directory already holding one and the sequence
+    was: copy2 over it, export, then `finally: staged_weights.unlink()`. The
+    stranger's checkpoint was overwritten and then removed, and the benchmark
+    exited 0 - measured, with the victim's bytes gone and no message anywhere.
+
+    A file that is not ours to touch means stop, not "clean up afterwards".
+    """
+    weights_dir = tmp_path / "runs"
+    weights_dir.mkdir()
+    weights = weights_dir / "best.pt"
+    weights.write_bytes(b"THE MODEL BEING EXPORTED")
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    victim = cache / "best.pt"
+    victim.write_bytes(b"A DIFFERENT CHECKPOINT SOMEONE CARES ABOUT")
+
+    def fake_export(src):
+        produced = src.with_suffix(".onnx")
+        produced.write_bytes(b"graph")
+        return produced
+
+    with pytest.raises(FileExistsError, match="already exists and is not"):
+        benchmark.export_onnx(
+            weights, cache / "best_1024.onnx", 1024, exporter=fake_export
+        )
+
+    assert victim.read_bytes() == b"A DIFFERENT CHECKPOINT SOMEONE CARES ABOUT", (
+        "the stranger's checkpoint was modified"
+    )
+    assert weights.read_bytes() == b"THE MODEL BEING EXPORTED"
+
+
+def test_re_exporting_over_our_own_staged_copy_still_works(tmp_path):
+    """The guard is about a DIFFERENT file, not about the path being occupied.
+
+    Exporting a checkpoint that already lives in the cache directory - the same
+    file, reached by the same path - is the ordinary re-export, and samefile()
+    is what tells the two apart. Refusing it would break the cache hit path
+    this whole function exists to serve.
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    weights = cache / "best.pt"
+    weights.write_bytes(b"checkpoint")
+
+    def fake_export(src):
+        produced = src.with_suffix(".onnx")
+        produced.write_bytes(b"graph")
+        return produced
+
+    benchmark.export_onnx(weights, cache / "best_1024.onnx", 1024, exporter=fake_export)
+
+    assert (cache / "best_1024.onnx").read_bytes() == b"graph"
+    assert weights.read_bytes() == b"checkpoint", "the source checkpoint was deleted"
+
+
 # --- CUDA placement --------------------------------------------------------- #
 
 
