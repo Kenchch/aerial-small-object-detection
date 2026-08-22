@@ -25,6 +25,7 @@ import re
 import statistics
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 # cv2/numpy/ultralytics are imported inside the functions that use them, after
@@ -442,7 +443,7 @@ def frame_source(source: Path):
             cap.release()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Track objects through a video with YOLO + ByteTrack"
     )
@@ -486,41 +487,253 @@ def main() -> None:
         "meaningful against the hardware you plan to deploy "
         "on, and the committed numbers are from a GPU run.",
     )
-    args = p.parse_args()
+    return p
 
-    # Checked before the model is loaded, let alone before either file handle
-    # is opened. cv2.VideoWriter truncates its target on open, so pointing
-    # --out at --source destroys the input while the reader is still streaming
-    # it - and the default --out is reports/track_out.mp4, the very file the
-    # README tells you to look at afterwards. resolve() so that
-    # reports/track_out.mp4 and ./reports/../reports/track_out.mp4 are
-    # recognised as the same file.
-    if not args.no_write and args.source.resolve() == args.out.resolve():
-        raise SystemExit(
-            f"--source and --out are the same file ({args.out}). The writer "
-            f"truncates its target on open, so this would destroy the input "
-            f"mid-read. Pass a different --out, or --no-write to profile only."
-        )
 
-    # Read and check the clip's provenance sidecar HERE - before the model is
-    # loaded and long before the frame loop. Validating it where the report is
-    # written meant a malformed sidecar surfaced after every frame had already
-    # been inferred, which is a minute of GPU time to be told a 2 KB JSON file
-    # is the wrong shape.
-    #
-    # And the digest, before the model loads. Comparing it where the report was
-    # built meant a clip that did not match its record was profiled in full
-    # first, and the disagreement appeared at the end of a run that should
-    # never have started.
-    source_matches = check_source_matches_record(
-        args.source, args.allow_source_mismatch
+def print_report(report: dict, n_frames: int, wall: float) -> None:
+    print(f"\n{'=' * 60}")
+    print(
+        f"  Tracked {n_frames} frames in {wall:.1f} s "
+        f"— {report['end_to_end_fps']} FPS end-to-end"
+    )
+    print(f"{'=' * 60}")
+    md, mn = report["stage_ms_median"], report["stage_ms_mean"]
+    print(f"  {'stage':<18}{'median':>10}{'mean':>10}")
+    print(f"  {'-' * 38}")
+    for k in ("decode", "detect_and_track", "annotate", "encode"):
+        if md[k] is None:
+            continue
+        print(f"  {k:<18}{md[k]:>9.2f} {mn[k]:>9.2f}")
+        if k == "detect_and_track":
+            for sub, v in report["detect_and_track_ms_median"].items():
+                print(f"    {sub:<16}{v:>9.2f}")
+    r = report["reconciliation"]
+    print(f"  {'-' * 38}")
+    print(f"  {'accounted':<18}{'':>9} {r['accounted_mean_ms']:>9.2f}")
+    print(f"  {'wall per frame':<18}{'':>9} {report['per_frame_wall_ms']:>9.2f}")
+    print(f"  coverage {r['coverage_pct']} %  (unaccounted {r['unaccounted_ms']} ms)")
+
+    w = report["warmup"]
+    print(
+        f"\n  first frame  : {w['first_frame_ms']} ms  "
+        f"({w['warmup_penalty_x']}× steady state)"
     )
 
-    import cv2
-    from ultralytics import YOLO
+    t = report["tracks"]
+    print(f"\n  unique tracks      : {t['unique_ids']}")
+    print(
+        f"  highest id seen    : {t['highest_id_seen']}  "
+        f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)"
+    )
+    print(f"  boxes per frame    : {t['mean_boxes_per_frame']}")
+    print(f"  mean track length  : {t['mean_track_len_frames']} frames")
+    print(f"  longest track      : {t['max_track_len_frames']} frames")
+    print(
+        f"  single-frame tracks: {t['single_frame_tracks']} ({t['single_frame_pct']} %)"
+    )
 
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    model = YOLO(str(args.weights))
+
+def build_report(
+    *,
+    t_decode: list[float],
+    t_infer: list[float],
+    t_draw: list[float],
+    t_write: list[float],
+    t_pre: list[float],
+    t_fwd: list[float],
+    t_post: list[float],
+    track_frames: dict,
+    n_frames: int,
+    wall: float,
+    setup_ms: float,
+    flush_ms: float,
+    output: dict | None,
+    source_matches: bool,
+    args,
+) -> dict:
+    lengths = list(track_frames.values())
+    fragments = sum(1 for v in lengths if v == 1)
+
+    # ByteTrack's id counter is global and monotonic: it increments for every
+    # tentative track, including the ones spawned from low-confidence
+    # detections that never get confirmed. The ratio of the highest id to the
+    # number of ids actually emitted is therefore a churn measure, and it
+    # matters downstream — anything keying on track id (a counter, a database,
+    # a re-id store) inherits that growth rate.
+    #
+    # track_frames is only written when a box is drawn, so this is the largest
+    # id that reached the output, not ByteTrack's internal counter (not exposed
+    # here, and possibly higher — a tentative track created after the last
+    # drawn box never appears). This and the churn ratio below are lower bounds.
+    # int() because the ids come out of a numpy array and np.int64 is not
+    # JSON-serialisable.
+    max_id = int(max(track_frames)) if track_frames else 0
+
+    med = lambda xs: statistics.median(xs) if xs else 0.0
+    mean = lambda xs: (sum(xs) / len(xs)) if xs else 0.0
+
+    # Median describes the steady state; mean is what the wall clock actually
+    # pays, and the two diverge sharply because the first frames carry CUDA
+    # context creation and cuDNN autotuning. Report both, and reconcile them
+    # against wall time so any unmeasured remainder is visible rather than
+    # quietly absorbed.
+    # Setup and flush happen once, not per frame, so they are amortised across
+    # the run to be comparable with the per-frame means. Left out entirely,
+    # they showed up as "unaccounted" and the coverage figure blamed the
+    # per-frame stages for time they never spent.
+    once_per_run_mean = (setup_ms + flush_ms) / n_frames
+    accounted_mean = (
+        mean(t_decode)
+        + mean(t_infer)
+        + mean(t_draw)
+        + mean(t_write)
+        + once_per_run_mean
+    )
+    per_frame_wall = wall / n_frames * 1000
+
+    # Association is not timed directly -- Ultralytics runs the tracker inside
+    # the same call and does not report it -- so take it as the remainder of
+    # the measured call after its own three reported phases. That remainder also
+    # absorbs Python-level call overhead, which is why it is named for both
+    # rather than presented as a clean ByteTrack number.
+    #
+    # Compute it per frame and take the median of THAT, not the difference of
+    # four separate medians. The medians of four series are generally not
+    # attained on the same frame, so their difference is not a quantity any
+    # frame exhibited; it can even come out negative while every individual
+    # frame's remainder is positive. The per-frame form is a real order
+    # statistic of a real quantity, and it degrades safely when Ultralytics
+    # reports a phase inconsistently.
+    assoc_median = med(association_remainders(t_infer, t_pre, t_fwd, t_post))
+
+    report = {
+        "frames": n_frames,
+        "wall_s": round(wall, 2),
+        "end_to_end_fps": round(n_frames / wall, 1),
+        "per_frame_wall_ms": round(per_frame_wall, 2),
+        "stage_ms_median": {
+            "decode": round(med(t_decode), 2),
+            "detect_and_track": round(med(t_infer), 2),
+            "annotate": round(med(t_draw), 2),
+            "encode": round(med(t_write), 2) if t_write else None,
+        },
+        # Once per run, not per frame: capture open + header read + writer
+        # open, and the writer's release() at the end.
+        "open_and_flush_ms": {
+            "setup": round(setup_ms, 2),
+            "flush": round(flush_ms, 2),
+            "amortised_per_frame": round(once_per_run_mean, 3),
+        },
+        "stage_ms_mean": {
+            "decode": round(mean(t_decode), 2),
+            "detect_and_track": round(mean(t_infer), 2),
+            "annotate": round(mean(t_draw), 2),
+            "encode": round(mean(t_write), 2) if t_write else None,
+        },
+        # What "detect + track" above is actually made of. benchmark.py times
+        # only the forward pass on a tensor already resident in VRAM, so it
+        # corresponds to `forward` here -- the rest is the cost of feeding a
+        # real frame in and turning logits back into tracked boxes.
+        "detect_and_track_ms_median": {
+            "preprocess": round(med(t_pre), 2),
+            "forward": round(med(t_fwd), 2),
+            "postprocess_nms": round(med(t_post), 2),
+            "association_and_overhead": round(assoc_median, 2),
+        },
+        "warmup": {
+            "first_frame_ms": round(t_infer[0], 1) if t_infer else None,
+            "steady_state_ms": round(med(t_infer), 2),
+            "warmup_penalty_x": round(t_infer[0] / med(t_infer), 1)
+            if t_infer and med(t_infer)
+            else None,
+        },
+        "reconciliation": {
+            "accounted_mean_ms": round(accounted_mean, 2),
+            "unaccounted_ms": round(per_frame_wall - accounted_mean, 2),
+            "coverage_pct": round(100 * accounted_mean / per_frame_wall, 1),
+        },
+        "tracks": {
+            "unique_ids": len(track_frames),
+            "highest_id_seen": max_id,
+            # Tentative (never-confirmed) ids per confirmed one -- NOT
+            # max_id / confirmed, which counts the confirmed ids themselves
+            # in the numerator too and would overstate this by exactly 1x.
+            "id_churn_ratio_min": round(
+                (max_id - len(track_frames)) / len(track_frames), 1
+            )
+            if track_frames
+            else 0,  # lower bound, see above
+            "mean_track_len_frames": round(sum(lengths) / len(lengths), 1)
+            if lengths
+            else 0,
+            "max_track_len_frames": max(lengths) if lengths else 0,
+            "single_frame_tracks": fragments,
+            "single_frame_pct": round(100 * fragments / len(lengths), 1)
+            if lengths
+            else 0,
+            "mean_boxes_per_frame": round(sum(lengths) / n_frames, 1),
+        },
+        "config": {
+            "weights": _for_report(args.weights),
+            # None rather than a path when nothing was written, so the
+            # report cannot name an output file that does not exist.
+            "out": None if args.no_write else _for_report(args.out),
+            "imgsz": args.imgsz,
+            "conf": args.conf,
+            "tracker": args.tracker,
+        },
+        # Every latency figure in this file is a property of the machine it ran
+        # on and the footage it ran over. Both are recorded, so the numbers can
+        # be checked rather than taken on trust.
+        "environment": _environment(args.device),
+        # None when --no-write was passed, so the report cannot describe an
+        # output file it did not produce.
+        "output": output,
+        "source": {
+            **_source_provenance(args.source),
+            # False only when --allow-source-mismatch was used, since the run
+            # stops otherwise. Recorded so the report says on its face that
+            # these numbers are about footage that is not what the record
+            # describes.
+            "ran_with_mismatch": not source_matches,
+        },
+    }
+    return report
+
+
+@dataclass
+class Pipeline:
+    src: object
+    writer: object | None
+    staged_out: Path
+    fps: float
+    width: int
+    height: int
+    setup_ms: float
+    # Beyond the fields the split called for: run_tracking stops the same
+    # clock open_pipeline started, and passing the start through the object
+    # keeps it the single source rather than two perf_counter() calls that
+    # could drift apart.
+    wall_start: float
+
+
+@dataclass
+class Timings:
+    infer: list[float]
+    draw: list[float]
+    write: list[float]
+    decode: list[float]
+    pre: list[float]
+    fwd: list[float]
+    post: list[float]
+    track_frames: dict
+    n_frames: int
+    flush_ms: float
+    wall_s: float
+
+
+def open_pipeline(args) -> Pipeline:
+    import cv2
 
     # The wall clock starts HERE, not after setup. Opening the capture, reading
     # the header - which for an image sequence is a full decode of frame 0 -
@@ -572,7 +785,22 @@ def main() -> None:
     # open. Reported rather than folded into t_decode, so the per-frame stage
     # numbers stay per-frame.
     setup_ms = (time.perf_counter() - wall_start) * 1000
+    return Pipeline(
+        src=src,
+        writer=writer,
+        staged_out=staged_out,
+        fps=fps,
+        width=W,
+        height=H,
+        setup_ms=setup_ms,
+        wall_start=wall_start,
+    )
 
+
+def run_tracking(model, pipe: Pipeline, args) -> Timings:
+    import cv2
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
     t_infer, t_draw, t_write, t_decode = [], [], [], []
     # Ultralytics fills Results.speed with its own internal split of the call.
     # Without these, "detect + track" is a single number roughly 3x the raw
@@ -599,7 +827,7 @@ def main() -> None:
     released = False
     flush_ms = 0.0
     try:
-        for frame, _, _ in src:
+        for frame, _, _ in pipe.src:
             t_decode.append((time.perf_counter() - t_decode_start) * 1000)
             n_frames += 1
 
@@ -662,9 +890,9 @@ def main() -> None:
                     )
             t_draw.append((time.perf_counter() - t0) * 1000)
 
-            if writer is not None:
+            if pipe.writer is not None:
                 t0 = time.perf_counter()
-                writer.write(frame)
+                pipe.writer.write(frame)
                 t_write.append((time.perf_counter() - t0) * 1000)
 
             t_decode_start = time.perf_counter()
@@ -674,24 +902,83 @@ def main() -> None:
         # encode work, and on a long clip it is not a rounding error. Stopping
         # the timer first was how "encode" could look cheap in a report whose
         # own wall time did not contain the expensive half of it.
-        if writer is not None:
+        if pipe.writer is not None:
             t0 = time.perf_counter()
-            writer.release()
+            pipe.writer.release()
             flush_ms = (time.perf_counter() - t0) * 1000
-        src.close()
+        pipe.src.close()
         released = True
     except BaseException:
         # The failure path. Nothing is timed here - there will be no report -
         # and the half-written output goes with it, so reports/ is never left
         # holding a truncated track_out.mp4 under a name that looks finished.
         if not released:
-            src.close()
-            if writer is not None:
-                writer.release()
-        staged_out.unlink(missing_ok=True)
+            pipe.src.close()
+            if pipe.writer is not None:
+                pipe.writer.release()
+        pipe.staged_out.unlink(missing_ok=True)
         raise
 
-    wall = time.perf_counter() - wall_start
+    wall = time.perf_counter() - pipe.wall_start
+    return Timings(
+        infer=t_infer,
+        draw=t_draw,
+        write=t_write,
+        decode=t_decode,
+        pre=t_pre,
+        fwd=t_fwd,
+        post=t_post,
+        track_frames=track_frames,
+        n_frames=n_frames,
+        flush_ms=flush_ms,
+        wall_s=wall,
+    )
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+
+    # Checked before the model is loaded, let alone before either file handle
+    # is opened. cv2.VideoWriter truncates its target on open, so pointing
+    # --out at --source destroys the input while the reader is still streaming
+    # it - and the default --out is reports/track_out.mp4, the very file the
+    # README tells you to look at afterwards. resolve() so that
+    # reports/track_out.mp4 and ./reports/../reports/track_out.mp4 are
+    # recognised as the same file.
+    if not args.no_write and args.source.resolve() == args.out.resolve():
+        raise SystemExit(
+            f"--source and --out are the same file ({args.out}). The writer "
+            f"truncates its target on open, so this would destroy the input "
+            f"mid-read. Pass a different --out, or --no-write to profile only."
+        )
+
+    # Read and check the clip's provenance sidecar HERE - before the model is
+    # loaded and long before the frame loop. Validating it where the report is
+    # written meant a malformed sidecar surfaced after every frame had already
+    # been inferred, which is a minute of GPU time to be told a 2 KB JSON file
+    # is the wrong shape.
+    #
+    # And the digest, before the model loads. Comparing it where the report was
+    # built meant a clip that did not match its record was profiled in full
+    # first, and the disagreement appeared at the end of a run that should
+    # never have started.
+    source_matches = check_source_matches_record(
+        args.source, args.allow_source_mismatch
+    )
+
+    from ultralytics import YOLO
+
+    model = YOLO(str(args.weights))
+
+    pipe = open_pipeline(args)
+
+    t = run_tracking(model, pipe, args)
+    writer, staged_out = pipe.writer, pipe.staged_out
+    W, H, setup_ms = pipe.width, pipe.height, pipe.setup_ms
+    t_decode, t_infer, t_draw, t_write = t.decode, t.infer, t.draw, t.write
+    t_pre, t_fwd, t_post = t.pre, t.fwd, t.post
+    track_frames, n_frames = t.track_frames, t.n_frames
+    flush_ms, wall = t.flush_ms, t.wall_s
 
     # One guard over everything that can still fail while the staged output
     # exists. Two statements used to sit outside any of it: the "no frames
@@ -732,196 +1019,25 @@ def main() -> None:
         # Mean track length is the honest single number for association quality:
         # a tracker that drops and re-acquires the same object inflates the track
         # count and collapses the mean.
-        lengths = list(track_frames.values())
-        fragments = sum(1 for v in lengths if v == 1)
-
-        # ByteTrack's id counter is global and monotonic: it increments for every
-        # tentative track, including the ones spawned from low-confidence
-        # detections that never get confirmed. The ratio of the highest id to the
-        # number of ids actually emitted is therefore a churn measure, and it
-        # matters downstream — anything keying on track id (a counter, a database,
-        # a re-id store) inherits that growth rate.
-        #
-        # track_frames is only written when a box is drawn, so this is the largest
-        # id that reached the output, not ByteTrack's internal counter (not exposed
-        # here, and possibly higher — a tentative track created after the last
-        # drawn box never appears). This and the churn ratio below are lower bounds.
-        # int() because the ids come out of a numpy array and np.int64 is not
-        # JSON-serialisable.
-        max_id = int(max(track_frames)) if track_frames else 0
-
-        med = lambda xs: statistics.median(xs) if xs else 0.0
-        mean = lambda xs: (sum(xs) / len(xs)) if xs else 0.0
-
-        # Median describes the steady state; mean is what the wall clock actually
-        # pays, and the two diverge sharply because the first frames carry CUDA
-        # context creation and cuDNN autotuning. Report both, and reconcile them
-        # against wall time so any unmeasured remainder is visible rather than
-        # quietly absorbed.
-        # Setup and flush happen once, not per frame, so they are amortised across
-        # the run to be comparable with the per-frame means. Left out entirely,
-        # they showed up as "unaccounted" and the coverage figure blamed the
-        # per-frame stages for time they never spent.
-        once_per_run_mean = (setup_ms + flush_ms) / n_frames
-        accounted_mean = (
-            mean(t_decode)
-            + mean(t_infer)
-            + mean(t_draw)
-            + mean(t_write)
-            + once_per_run_mean
-        )
-        per_frame_wall = wall / n_frames * 1000
-
-        # Association is not timed directly -- Ultralytics runs the tracker inside
-        # the same call and does not report it -- so take it as the remainder of
-        # the measured call after its own three reported phases. That remainder also
-        # absorbs Python-level call overhead, which is why it is named for both
-        # rather than presented as a clean ByteTrack number.
-        #
-        # Compute it per frame and take the median of THAT, not the difference of
-        # four separate medians. The medians of four series are generally not
-        # attained on the same frame, so their difference is not a quantity any
-        # frame exhibited; it can even come out negative while every individual
-        # frame's remainder is positive. The per-frame form is a real order
-        # statistic of a real quantity, and it degrades safely when Ultralytics
-        # reports a phase inconsistently.
-        assoc_median = med(association_remainders(t_infer, t_pre, t_fwd, t_post))
-
-        report = {
-            "frames": n_frames,
-            "wall_s": round(wall, 2),
-            "end_to_end_fps": round(n_frames / wall, 1),
-            "per_frame_wall_ms": round(per_frame_wall, 2),
-            "stage_ms_median": {
-                "decode": round(med(t_decode), 2),
-                "detect_and_track": round(med(t_infer), 2),
-                "annotate": round(med(t_draw), 2),
-                "encode": round(med(t_write), 2) if t_write else None,
-            },
-            # Once per run, not per frame: capture open + header read + writer
-            # open, and the writer's release() at the end.
-            "open_and_flush_ms": {
-                "setup": round(setup_ms, 2),
-                "flush": round(flush_ms, 2),
-                "amortised_per_frame": round(once_per_run_mean, 3),
-            },
-            "stage_ms_mean": {
-                "decode": round(mean(t_decode), 2),
-                "detect_and_track": round(mean(t_infer), 2),
-                "annotate": round(mean(t_draw), 2),
-                "encode": round(mean(t_write), 2) if t_write else None,
-            },
-            # What "detect + track" above is actually made of. benchmark.py times
-            # only the forward pass on a tensor already resident in VRAM, so it
-            # corresponds to `forward` here -- the rest is the cost of feeding a
-            # real frame in and turning logits back into tracked boxes.
-            "detect_and_track_ms_median": {
-                "preprocess": round(med(t_pre), 2),
-                "forward": round(med(t_fwd), 2),
-                "postprocess_nms": round(med(t_post), 2),
-                "association_and_overhead": round(assoc_median, 2),
-            },
-            "warmup": {
-                "first_frame_ms": round(t_infer[0], 1) if t_infer else None,
-                "steady_state_ms": round(med(t_infer), 2),
-                "warmup_penalty_x": round(t_infer[0] / med(t_infer), 1)
-                if t_infer and med(t_infer)
-                else None,
-            },
-            "reconciliation": {
-                "accounted_mean_ms": round(accounted_mean, 2),
-                "unaccounted_ms": round(per_frame_wall - accounted_mean, 2),
-                "coverage_pct": round(100 * accounted_mean / per_frame_wall, 1),
-            },
-            "tracks": {
-                "unique_ids": len(track_frames),
-                "highest_id_seen": max_id,
-                # Tentative (never-confirmed) ids per confirmed one -- NOT
-                # max_id / confirmed, which counts the confirmed ids themselves
-                # in the numerator too and would overstate this by exactly 1x.
-                "id_churn_ratio_min": round(
-                    (max_id - len(track_frames)) / len(track_frames), 1
-                )
-                if track_frames
-                else 0,  # lower bound, see above
-                "mean_track_len_frames": round(sum(lengths) / len(lengths), 1)
-                if lengths
-                else 0,
-                "max_track_len_frames": max(lengths) if lengths else 0,
-                "single_frame_tracks": fragments,
-                "single_frame_pct": round(100 * fragments / len(lengths), 1)
-                if lengths
-                else 0,
-                "mean_boxes_per_frame": round(sum(lengths) / n_frames, 1),
-            },
-            "config": {
-                "weights": _for_report(args.weights),
-                # None rather than a path when nothing was written, so the
-                # report cannot name an output file that does not exist.
-                "out": None if args.no_write else _for_report(args.out),
-                "imgsz": args.imgsz,
-                "conf": args.conf,
-                "tracker": args.tracker,
-            },
-            # Every latency figure in this file is a property of the machine it ran
-            # on and the footage it ran over. Both are recorded, so the numbers can
-            # be checked rather than taken on trust.
-            "environment": _environment(args.device),
-            # None when --no-write was passed, so the report cannot describe an
-            # output file it did not produce.
-            "output": output,
-            "source": {
-                **_source_provenance(args.source),
-                # False only when --allow-source-mismatch was used, since the run
-                # stops otherwise. Recorded so the report says on its face that
-                # these numbers are about footage that is not what the record
-                # describes.
-                "ran_with_mismatch": not source_matches,
-            },
-        }
-
-        print(f"\n{'=' * 60}")
-        print(
-            f"  Tracked {n_frames} frames in {wall:.1f} s "
-            f"— {report['end_to_end_fps']} FPS end-to-end"
-        )
-        print(f"{'=' * 60}")
-        md, mn = report["stage_ms_median"], report["stage_ms_mean"]
-        print(f"  {'stage':<18}{'median':>10}{'mean':>10}")
-        print(f"  {'-' * 38}")
-        for k in ("decode", "detect_and_track", "annotate", "encode"):
-            if md[k] is None:
-                continue
-            print(f"  {k:<18}{md[k]:>9.2f} {mn[k]:>9.2f}")
-            if k == "detect_and_track":
-                for sub, v in report["detect_and_track_ms_median"].items():
-                    print(f"    {sub:<16}{v:>9.2f}")
-        r = report["reconciliation"]
-        print(f"  {'-' * 38}")
-        print(f"  {'accounted':<18}{'':>9} {r['accounted_mean_ms']:>9.2f}")
-        print(f"  {'wall per frame':<18}{'':>9} {report['per_frame_wall_ms']:>9.2f}")
-        print(
-            f"  coverage {r['coverage_pct']} %  (unaccounted {r['unaccounted_ms']} ms)"
+        report = build_report(
+            t_decode=t_decode,
+            t_infer=t_infer,
+            t_draw=t_draw,
+            t_write=t_write,
+            t_pre=t_pre,
+            t_fwd=t_fwd,
+            t_post=t_post,
+            track_frames=track_frames,
+            n_frames=n_frames,
+            wall=wall,
+            setup_ms=setup_ms,
+            flush_ms=flush_ms,
+            output=output,
+            source_matches=source_matches,
+            args=args,
         )
 
-        w = report["warmup"]
-        print(
-            f"\n  first frame  : {w['first_frame_ms']} ms  "
-            f"({w['warmup_penalty_x']}× steady state)"
-        )
-
-        t = report["tracks"]
-        print(f"\n  unique tracks      : {t['unique_ids']}")
-        print(
-            f"  highest id seen    : {t['highest_id_seen']}  "
-            f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)"
-        )
-        print(f"  boxes per frame    : {t['mean_boxes_per_frame']}")
-        print(f"  mean track length  : {t['mean_track_len_frames']} frames")
-        print(f"  longest track      : {t['max_track_len_frames']} frames")
-        print(
-            f"  single-frame tracks: {t['single_frame_tracks']} ({t['single_frame_pct']} %)"
-        )
+        print_report(report, n_frames, wall)
 
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         out_json = REPORTS_DIR / "tracking.json"
