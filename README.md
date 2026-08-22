@@ -688,6 +688,16 @@ accepts every frame and reports nothing, so `frames` in the profile only counts
 what was *processed*. Its sha256 (`fe9e21cccb5711d1…`) and a digest of its
 decoded frames go into `reports/tracking.json` under `output`.
 
+Both artefacts are staged and published video-first, so the failure that
+matters publishes neither: if the mp4 cannot be moved into place, the report is
+still a `.tmp` and the previous pair stands untouched. **This is not atomic and
+is not claimed to be.** Two files cannot be replaced in one operation, so a
+crash between the two replaces leaves a new video beside the previous report.
+That window is one `os.replace` of a 3 KB file, and it is *detectable* — the
+report's `output.sha256` will not match the video beside it, which is the check
+described below. Closing it entirely needs a version directory and a single
+pointer, the way `retail-ai-pipeline` publishes.
+
 `reports/tracking_demo.gif` is built from it by `src/make_demo_gif.py`, which
 records the source mp4's digest in `reports/tracking_demo.provenance.json`.
 That digest matches `output.sha256` above, which is what makes the GIF part of

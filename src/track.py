@@ -1041,23 +1041,43 @@ def main() -> None:
 
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         out_json = REPORTS_DIR / "tracking.json"
-        out_json.write_text(json.dumps(report, indent=2))
 
-        # The video is published LAST, once the report that describes it exists.
-        # It used to be replaced ~200 lines earlier, before all the statistics
-        # above were computed, so any failure in between left reports/ holding a
-        # NEW track_out.mp4 beside a tracking.json still carrying the previous
-        # run's output.sha256 - the exact chain the README tells a reader to
-        # check, broken, by a run that raised.
+        # Both artefacts are staged, then published video-first.
+        #
+        # Writing tracking.json straight to its published path meant a failure
+        # in the replace below left the NEW report - carrying the new mp4's
+        # sha256 - beside the OLD video. The chain the README tells a reader to
+        # check was then broken by a run that raised, and the temp mp4 had been
+        # cleaned up, so there was nothing to reconcile against.
+        #
+        # Staged, the failure that actually matters publishes NEITHER: if the
+        # video cannot be replaced, the report is still a .tmp and the previous
+        # pair stands untouched.
+        #
+        # This is not atomic and is not claimed to be. Two files cannot be
+        # replaced in one operation, so a crash between the two replaces leaves
+        # a new video beside the previous report. That window is one
+        # os.replace of a 3 KB file, and it is DETECTABLE - the report's
+        # output.sha256 will not match the video beside it, which is exactly
+        # the check the README already asks a reader to run. Closing it
+        # entirely needs a version directory and a single pointer, the way
+        # retail-ai-pipeline publishes.
+        staged_json = out_json.with_suffix(".json.tmp")
+        staged_json.write_text(json.dumps(report, indent=2))
+
         if writer is not None:
             staged_out.replace(args.out)
+        staged_json.replace(out_json)
     except BaseException:
-        # Covers the whole life of the staged output: the read-back, every
+        # Covers the whole life of both staged artefacts: the read-back, every
         # statistic computed from the run, the report write, and the publish
         # itself. A narrower guard is how <out>.tmp.mp4 leaked twice - once
         # from the `no frames read` exit, once from probe_video - and moving
         # the publish after the report write would have opened a third.
         staged_out.unlink(missing_ok=True)
+        # Spelled out rather than via out_json: the failures above can
+        # happen before that name is bound.
+        (REPORTS_DIR / "tracking.json.tmp").unlink(missing_ok=True)
         raise
 
     print(f"\n  metrics -> {out_json}")

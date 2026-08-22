@@ -514,7 +514,11 @@ def test_a_failing_report_write_leaves_no_staged_output(tmp_path, monkeypatch):
     real = Path.write_text
 
     def boom(self, *a, **k):
-        if self.name == "tracking.json":
+        # startswith, not ==: the report is staged as tracking.json.tmp and
+        # only replaced into place once the video is published. Matching the
+        # published name alone let the write succeed, and main() then wrote a
+        # stub report over the repo's real one.
+        if self.name.startswith("tracking.json"):
             raise OSError("no space left on device")
         return real(self, *a, **k)
 
@@ -525,3 +529,46 @@ def test_a_failing_report_write_leaves_no_staged_output(tmp_path, monkeypatch):
 
     assert not (tmp_path / "track_out.tmp.mp4").exists(), "the staged output survived"
     assert not out.exists(), "the video was published without a report"
+
+
+def test_a_failing_video_replace_publishes_neither(tmp_path, monkeypatch):
+    """FAULT INJECTION: the mp4 cannot be moved into place.
+
+    tracking.json used to be written straight to its published path before the
+    video was replaced, so this failure left the NEW report - carrying the new
+    mp4's sha256 - beside the OLD video, with the temp mp4 already cleaned up
+    and nothing to reconcile against. The chain the README asks a reader to
+    check was broken by a run that raised.
+
+    Staged, the report is still a .tmp when the video fails, so the previous
+    pair stands untouched.
+    """
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
+    out.write_bytes(b"the previous run's video")
+
+    reports = track.REPORTS_DIR
+    published_json = reports / "tracking.json"
+    before = published_json.read_bytes() if published_json.is_file() else None
+
+    real_replace = Path.replace
+
+    def refuse(self, target):
+        if str(self).endswith(".tmp.mp4"):
+            raise OSError("the volume went away")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", refuse)
+
+    try:
+        with pytest.raises(OSError, match="volume went away"):
+            track.main()
+
+        assert out.read_bytes() == b"the previous run's video", "the video moved"
+        assert not (tmp_path / "track_out.tmp.mp4").exists()
+        assert not (reports / "tracking.json.tmp").exists(), (
+            "the staged report survived"
+        )
+        after = published_json.read_bytes() if published_json.is_file() else None
+        assert after == before, "the report was published without its video"
+    finally:
+        (reports / "tracking.json.tmp").unlink(missing_ok=True)
