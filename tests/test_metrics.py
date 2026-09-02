@@ -8,6 +8,7 @@ pure functions and is pinned here with synthetic inputs.
 """
 
 import json
+import math
 
 import numpy as np
 import pytest
@@ -165,6 +166,38 @@ def test_association_remainder_rejects_ragged_inputs():
     rather than report that something went wrong collecting it."""
     with pytest.raises(ValueError):
         association_remainders([1.0, 2.0], [0.1], [0.1, 0.2], [0.1, 0.2])
+
+
+# --- accuracy result validation ------------------------------------------- #
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.01, 1.01, "nope"])
+def test_an_unusable_map_tolerance_cannot_disable_the_accuracy_gate(value):
+    """NaN is the dangerous case: every ``delta > NaN`` comparison is false,
+    so the previous float-only parser silently accepted any ONNX regression."""
+    with pytest.raises(ValueError, match=r"finite fraction in \[0, 1\]"):
+        benchmark._map_tolerance(value)
+
+
+@pytest.mark.parametrize("value", [0, 0.01, 1, "0.05"])
+def test_a_finite_map_tolerance_is_accepted(value):
+    assert benchmark._map_tolerance(value) == pytest.approx(float(value))
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.01, 1.01])
+def test_a_broken_model_metric_cannot_pass_the_accuracy_gate(value):
+    """A non-finite mAP used to pass the same comparison and was then emitted
+    as a non-standard JSON token in the published benchmark report."""
+    with pytest.raises(
+        SystemExit, match=r"finite fraction in \[0, 1\].*Nothing was written"
+    ):
+        benchmark._validated_map("ONNX mAP50", value)
+
+
+def test_a_real_model_metric_is_returned_as_a_plain_float():
+    assert benchmark._validated_map("ONNX mAP50", np.float64(0.3748)) == pytest.approx(
+        0.3748
+    )
 
 
 # --- export cache ---------------------------------------------------------- #

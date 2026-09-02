@@ -51,6 +51,48 @@ WARMUP_ITERS = 20
 TIMED_ITERS = 100
 
 
+def _map_tolerance(value) -> float:
+    """Parse the accuracy-loss ceiling without allowing it to disable itself.
+
+    ``float`` accepts NaN and infinity, but neither is a usable threshold: every
+    comparison with NaN is false, and a tolerance above 1 can never be exceeded
+    by mAP.  This function is used both by argparse and by ``run_one`` so callers
+    using the Python API get the same guard as the CLI.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"map tolerance must be a finite fraction in [0, 1], got {value!r}"
+        ) from exc
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        raise ValueError(
+            f"map tolerance must be a finite fraction in [0, 1], got {value!r}"
+        )
+    return parsed
+
+
+def _validated_map(name: str, value) -> float:
+    """Return one mAP value, refusing a broken evaluation result.
+
+    A NaN metric otherwise passes the deployment gate because ``NaN > limit``
+    is false, then reaches benchmark.json as JavaScript's non-standard ``NaN``
+    token.  mAP is a fraction, so values outside the unit interval are equally
+    invalid evidence.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(
+            f"{name} is not a numeric mAP value: {value!r}. Nothing was written."
+        ) from exc
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        raise SystemExit(
+            f"{name} must be a finite fraction in [0, 1], got {value!r}. Nothing was written."
+        )
+    return parsed
+
+
 def _summarise(times_ms: list[float]) -> dict:
     """Median / p95 / throughput from a list of per-iteration latencies.
 
@@ -418,6 +460,8 @@ def run_one(
     allow_cpu_fallback: bool = False,
 ) -> dict:
     """Accuracy + latency across every available backend."""
+    map_tolerance = _map_tolerance(map_tolerance)
+
     import torch
     from ultralytics import YOLO
 
@@ -425,10 +469,12 @@ def run_one(
     metrics = YOLO(str(weights)).val(
         data=data, imgsz=imgsz, device=device, verbose=False
     )
+    pytorch_map50 = _validated_map("PyTorch mAP50", metrics.box.map50)
+    pytorch_map95 = _validated_map("PyTorch mAP50-95", metrics.box.map)
     row = {
         "imgsz": imgsz,
-        "mAP50": round(metrics.box.map50, 4),
-        "mAP50_95": round(metrics.box.map, 4),
+        "mAP50": round(pytorch_map50, 4),
+        "mAP50_95": round(pytorch_map95, 4),
     }
     print(f"  mAP50={row['mAP50']}  mAP50-95={row['mAP50_95']}")
 
@@ -475,14 +521,16 @@ def run_one(
     onnx_metrics = YOLO(str(onnx_path), task="detect").val(
         data=data, imgsz=imgsz, device=device, verbose=False
     )
+    onnx_map50 = _validated_map("ONNX mAP50", onnx_metrics.box.map50)
+    onnx_map95 = _validated_map("ONNX mAP50-95", onnx_metrics.box.map)
     row["accuracy"] = {
         "pytorch": {
-            "mAP50": round(float(metrics.box.map50), 4),
-            "mAP50_95": round(float(metrics.box.map), 4),
+            "mAP50": round(pytorch_map50, 4),
+            "mAP50_95": round(pytorch_map95, 4),
         },
         "onnx": {
-            "mAP50": round(float(onnx_metrics.box.map50), 4),
-            "mAP50_95": round(float(onnx_metrics.box.map), 4),
+            "mAP50": round(onnx_map50, 4),
+            "mAP50_95": round(onnx_map95, 4),
         },
     }
     d50 = row["accuracy"]["onnx"]["mAP50"] - row["accuracy"]["pytorch"]["mAP50"]
@@ -539,7 +587,7 @@ def main() -> None:
     )
     p.add_argument(
         "--map-tolerance",
-        type=float,
+        type=_map_tolerance,
         default=0.01,
         help="Fail if ONNX mAP differs from PyTorch by more than "
         "this. An export is meant to change speed, not the model.",
@@ -575,7 +623,10 @@ def main() -> None:
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(row, indent=2))
+    # Standard JSON has no NaN or Infinity. The accuracy values are checked
+    # above; this final guard also catches a broken latency measurement before
+    # it can replace a previously valid report with a file other tools reject.
+    args.out.write_text(json.dumps(row, indent=2, allow_nan=False))
 
     def med(key: str, regime: str) -> str:
         v = row.get(key, {}).get(regime, {}).get("median_ms")
