@@ -2,6 +2,20 @@
 
 [![CI](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml)
 
+## Licence and attribution
+
+Code in `src/` and `tests/` is available under the repository's MIT licence.
+The pipeline depends on Ultralytics, which is distributed under AGPL-3.0;
+running or distributing the combined work must comply with that licence. The
+published `best.pt` model and its ONNX export were fine-tuned from
+Ultralytics' `yolo11n.pt` and are offered under AGPL-3.0, not MIT.
+
+VisDrone2019 is copyright the AISKYEYE team at Tianjin University. Its official
+repository does not publish an explicit dataset licence, so this repository
+does not assume commercial reuse rights. Demo media derived from VisDrone
+frames is provided for research demonstration only. See
+[`NOTICE`](NOTICE) for links and the dataset citation.
+
 Object detection, tracking and deployment benchmarking with YOLO11 on
 VisDrone2019 — trained, evaluated, exported to ONNX, and run through a
 tracking pipeline with a measured deployment profile.
@@ -705,3 +719,11 @@ the same chain rather than an illustration. It used to be a hand-run ffmpeg
 command that lived in somebody's shell history, with nothing saying which run
 it showed. `src/track.py --source
 reports/demo_pan.mp4` regenerates the underlying video.
+
+## How this was built
+
+Built with AI pair-programming (Claude Code and OpenAI Codex) for drafting,
+refactoring and test scaffolding. I set the detection problem, chose the data
+and evaluation rules, ran every benchmark on my own hardware, and reviewed and
+edited the code. Commits where an assistant contributed code retain a
+`Co-Authored-By` trailer.

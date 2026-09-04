@@ -1,0 +1,31 @@
+Third-party notices
+===================
+
+Ultralytics
+-----------
+This project depends on Ultralytics and fine-tunes the Ultralytics yolo11n.pt
+weights. Ultralytics is licensed under GNU AGPL-3.0 unless a separate enterprise
+licence applies. The published best.pt model and its ONNX export are therefore
+offered under AGPL-3.0, not under this repository's MIT licence.
+
+Project and licence information: https://github.com/ultralytics/ultralytics
+
+VisDrone2019
+------------
+VisDrone2019 is copyright the AISKYEYE team at Tianjin University. The official
+dataset repository does not include an explicit licence. Do not assume that
+commercial use or redistribution is permitted without written permission from
+the dataset owner. Repository demo media derived from VisDrone frames is
+provided for research demonstration only.
+
+Dataset information: https://github.com/VisDrone/VisDrone-Dataset
+
+Citation:
+
+@article{zhu2021detection,
+  title={Detection and Tracking Meet Drones Challenge},
+  author={Zhu, Pengfei and Wen, Longyin and Du, Dawei and Bian, Xiao and Fan,
+          Huasheng and Hu, Qinghua and Ling, Haibin},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year={2021}
+}
