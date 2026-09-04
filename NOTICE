@@ -22,10 +22,14 @@ Dataset information: https://github.com/VisDrone/VisDrone-Dataset
 
 Citation:
 
-@article{zhu2021detection,
+@article{zhu2022detection,
   title={Detection and Tracking Meet Drones Challenge},
   author={Zhu, Pengfei and Wen, Longyin and Du, Dawei and Bian, Xiao and Fan,
-          Huasheng and Hu, Qinghua and Ling, Haibin},
+          Heng and Hu, Qinghua and Ling, Haibin},
   journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
-  year={2021}
+  volume={44},
+  number={11},
+  pages={7380--7399},
+  year={2022},
+  doi={10.1109/TPAMI.2021.3119563}
 }
