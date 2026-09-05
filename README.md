@@ -10,6 +10,18 @@ Aerial frames are large and the things worth detecting in them are tiny. The
 label statistics are measured before training to justify the input resolution
 chosen, rather than assumed.
 
+## Demo at a glance
+
+![Object detection and tracking pipeline demonstration](reports/tracking_demo.gif)
+
+This clip pans across a single real image to demonstrate the processing
+pipeline. The camera motion is synthetic; it does not demonstrate tracking
+accuracy on independently moving objects.
+
+The study compares detection accuracy with inference speed on a laptop GPU.
+Start with [Results](#results) for accuracy, [export and latency](#deployment-export-and-latency)
+for speed, or [Usage](#usage) to reproduce the experiment.
+
 > Uses Ultralytics (AGPL-3.0), and the published weights are AGPL-3.0 rather
 > than MIT. If you intend to reuse any of this, read
 > [Licence and attribution](#licence-and-attribution) first.
@@ -279,7 +291,7 @@ association logic under realistic latency; it does not exercise independently
 moving objects or occlusion, so track-continuity numbers below describe the
 *pipeline*, not tracking accuracy against ground truth.
 
-![Tracking demo](reports/tracking_demo.gif)
+The [demo preview above](#demo-at-a-glance) shows this pipeline in action.
 
 90 frames, 1024px:
 
