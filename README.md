@@ -2,20 +2,6 @@
 
 [![CI](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml)
 
-## Licence and attribution
-
-Code in `src/` and `tests/` is available under the repository's MIT licence.
-The pipeline depends on Ultralytics, which is distributed under AGPL-3.0;
-running or distributing the combined work must comply with that licence. The
-published `best.pt` model and its ONNX export were fine-tuned from
-Ultralytics' `yolo11n.pt` and are offered under AGPL-3.0, not MIT.
-
-VisDrone2019 is copyright the AISKYEYE team at Tianjin University. Its official
-repository does not publish an explicit dataset licence, so this repository
-does not assume commercial reuse rights. Demo media derived from VisDrone
-frames is provided for research demonstration only. See
-[`NOTICE`](NOTICE) for links and the dataset citation.
-
 Object detection, tracking and deployment benchmarking with YOLO11 on
 VisDrone2019 — trained, evaluated, exported to ONNX, and run through a
 tracking pipeline with a measured deployment profile.
@@ -23,6 +9,22 @@ tracking pipeline with a measured deployment profile.
 Aerial frames are large and the things worth detecting in them are tiny. The
 label statistics are measured before training to justify the input resolution
 chosen, rather than assumed.
+
+> Uses Ultralytics (AGPL-3.0), and the published weights are AGPL-3.0 rather
+> than MIT. If you intend to reuse any of this, read
+> [Licence and attribution](#licence-and-attribution) first.
+
+## Contents
+
+- [Why this dataset](#why-this-dataset)
+- [The problem, quantified](#the-problem-quantified)
+- [Results](#results)
+- [Deployment: export and latency](#deployment-export-and-latency)
+- [Deployment: tracking](#deployment-tracking)
+- [Engineering notes](#engineering-notes) — where the measured numbers came from, including four things that were wrong at first
+- [What this does not establish](#what-this-does-not-establish)
+- [Setup](#setup) · [Usage](#usage) · [Layout](#layout) · [Tests](#tests)
+- [Licence and attribution](#licence-and-attribution)
 
 ---
 
@@ -719,6 +721,20 @@ the same chain rather than an illustration. It used to be a hand-run ffmpeg
 command that lived in somebody's shell history, with nothing saying which run
 it showed. `src/track.py --source
 reports/demo_pan.mp4` regenerates the underlying video.
+
+## Licence and attribution
+
+Code in `src/` and `tests/` is available under the repository's MIT licence.
+The pipeline depends on Ultralytics, which is distributed under AGPL-3.0;
+running or distributing the combined work must comply with that licence. The
+published `best.pt` model and its ONNX export were fine-tuned from
+Ultralytics' `yolo11n.pt` and are offered under AGPL-3.0, not MIT.
+
+VisDrone2019 is copyright the AISKYEYE team at Tianjin University. Its official
+repository does not publish an explicit dataset licence, so this repository
+does not assume commercial reuse rights. Demo media derived from VisDrone
+frames is provided for research demonstration only. See
+[`NOTICE`](NOTICE) for links and the dataset citation.
 
 ## How this was built
 
