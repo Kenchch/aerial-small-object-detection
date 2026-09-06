@@ -1,0 +1,31 @@
+{
+  "runs": 5,
+  "frames_each": [
+    90,
+    90,
+    90,
+    90,
+    90
+  ],
+  "protocol": "Five separate Python processes; decode, inference, annotation and encoding enabled. Wall time includes model warm-up within tracking. Same 90-frame synthetic pan source and release v1.0 checkpoint.",
+  "statistics": {
+    "wall_seconds": {
+      "median": 10.66,
+      "min": 10.06,
+      "max": 12.5,
+      "sample_stddev": 1.0271
+    },
+    "end_to_end_fps": {
+      "median": 8.4,
+      "min": 7.2,
+      "max": 8.9,
+      "sample_stddev": 0.7232
+    },
+    "detect_and_track_frame_median_ms": {
+      "median": 37.3,
+      "min": 33.8,
+      "max": 47.42,
+      "sample_stddev": 5.5796
+    }
+  }
+}

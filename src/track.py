@@ -454,6 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Video file or directory of ordered frames.",
     )
+    p.add_argument("--report", type=Path, default=REPORTS_DIR / "tracking.json")
     p.add_argument("--imgsz", type=int, default=1024)
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument(
@@ -937,6 +938,13 @@ def run_tracking(model, pipe: Pipeline, args) -> Timings:
 
 def main() -> None:
     args = build_parser().parse_args()
+    protected_paths = {
+        args.source.resolve(),
+        args.weights.resolve(),
+        args.out.resolve(),
+    }
+    if args.report.resolve() in protected_paths:
+        raise SystemExit("--report must differ from source, weights and video output")
 
     # Checked before the model is loaded, let alone before either file handle
     # is opened. cv2.VideoWriter truncates its target on open, so pointing
@@ -1039,8 +1047,8 @@ def main() -> None:
 
         print_report(report, n_frames, wall)
 
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        out_json = REPORTS_DIR / "tracking.json"
+        out_json = args.report
+        out_json.parent.mkdir(parents=True, exist_ok=True)
 
         # Both artefacts are staged, then published video-first.
         #
@@ -1077,7 +1085,7 @@ def main() -> None:
         staged_out.unlink(missing_ok=True)
         # Spelled out rather than via out_json: the failures above can
         # happen before that name is bound.
-        (REPORTS_DIR / "tracking.json.tmp").unlink(missing_ok=True)
+        args.report.with_suffix(".json.tmp").unlink(missing_ok=True)
         raise
 
     print(f"\n  metrics -> {out_json}")

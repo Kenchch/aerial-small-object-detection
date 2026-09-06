@@ -591,7 +591,7 @@ curl -L -o runs/n_1024/weights/best.pt \
   https://github.com/Kenchch/aerial-small-object-detection/releases/download/v1.0/best.pt
 ```
 
-5.2 MB, sha256 `8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e`.
+5,498,835 bytes (5.50 MB / 5.24 MiB), sha256 `8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e`.
 
 The accuracy and latency numbers are reproducible from this checkpoint plus the
 VisDrone val split plus a comparable environment — `reports/benchmark.json`
@@ -674,7 +674,7 @@ src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 src/make_demo_gif.py    README GIF from track_out.mp4, with its digest
 tests/                  unit tests; run with `pytest`
-resume_training.ps1     restart an interrupted run from last.pt (Windows)
+scripts/resume.sh       restart an interrupted run from last.pt (Bash)
 runs/                   training artefacts (weights gitignored)
 reports/                evaluation (val + train), benchmark, tracking output (JSON)
 ```

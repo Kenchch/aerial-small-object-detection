@@ -13,3 +13,5 @@
 # Self-contained report bundles, not hand-written source -- exclude from
 # GitHub's language detection so it reports the Python in src/, not this HTML.
 reports/*.html linguist-generated=true
+
+*.sh text eol=lf

@@ -1,0 +1,29 @@
+{
+  "precision": "FP16",
+  "split": "val",
+  "imgsz": 1024,
+  "checkpoint_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
+  "onnx_sha256": "793e4cf0337764b93d7b64e7d4d1b37c2a602774a353c697c99cdffe42333994",
+  "mAP50": 0.3741616073851857,
+  "mAP50_95": 0.2208982612808026,
+  "latency": {
+    "scope": "ORT session.run, host-to-device + forward + device-to-host; no preprocessing/NMS",
+    "input": "seed-0 random float16 tensor; batch=1",
+    "warmup": 10,
+    "iterations": 100,
+    "median_ms": 8.588200085796416,
+    "p95_ms": 17.161350161768496
+  },
+  "environment": {
+    "torch": "2.6.0+cu124",
+    "ultralytics": "8.4.110",
+    "onnxruntime": "1.20.2",
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "intra_op_num_threads": 0
+  }
+}

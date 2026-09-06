@@ -1,0 +1,190 @@
+{
+  "accuracy": {
+    "imgsz": 1024,
+    "overall": {
+      "precision": 0.4242,
+      "recall": 0.3543,
+      "mAP50": 0.3183,
+      "mAP50_95": 0.1831
+    },
+    "per_class": {
+      "pedestrian": {
+        "precision": 0.4413,
+        "recall": 0.3274,
+        "mAP50": 0.2975,
+        "mAP50_95": 0.1171
+      },
+      "people": {
+        "precision": 0.4528,
+        "recall": 0.1277,
+        "mAP50": 0.1427,
+        "mAP50_95": 0.0479
+      },
+      "bicycle": {
+        "precision": 0.2328,
+        "recall": 0.106,
+        "mAP50": 0.0906,
+        "mAP50_95": 0.037
+      },
+      "car": {
+        "precision": 0.6619,
+        "recall": 0.7562,
+        "mAP50": 0.7379,
+        "mAP50_95": 0.462
+      },
+      "van": {
+        "precision": 0.405,
+        "recall": 0.4226,
+        "mAP50": 0.3683,
+        "mAP50_95": 0.2474
+      },
+      "truck": {
+        "precision": 0.3865,
+        "recall": 0.4534,
+        "mAP50": 0.3833,
+        "mAP50_95": 0.2421
+      },
+      "tricycle": {
+        "precision": 0.2416,
+        "recall": 0.2642,
+        "mAP50": 0.1582,
+        "mAP50_95": 0.0881
+      },
+      "awning-tricycle": {
+        "precision": 0.3639,
+        "recall": 0.1853,
+        "mAP50": 0.1512,
+        "mAP50_95": 0.0863
+      },
+      "bus": {
+        "precision": 0.6443,
+        "recall": 0.5388,
+        "mAP50": 0.5524,
+        "mAP50_95": 0.3837
+      },
+      "motor": {
+        "precision": 0.4122,
+        "recall": 0.361,
+        "mAP50": 0.3005,
+        "mAP50_95": 0.1191
+      }
+    },
+    "best_class": "car",
+    "worst_class": "bicycle",
+    "error_split": {
+      "pedestrian": {
+        "correct": 0.301,
+        "missed_as_background": 0.69,
+        "misclassified": 0.009,
+        "top_confusion": "people"
+      },
+      "people": {
+        "correct": 0.09,
+        "missed_as_background": 0.84,
+        "misclassified": 0.07,
+        "top_confusion": "pedestrian"
+      },
+      "bicycle": {
+        "correct": 0.075,
+        "missed_as_background": 0.697,
+        "misclassified": 0.229,
+        "top_confusion": "motor"
+      },
+      "car": {
+        "correct": 0.707,
+        "missed_as_background": 0.247,
+        "misclassified": 0.047,
+        "top_confusion": "van"
+      },
+      "van": {
+        "correct": 0.292,
+        "missed_as_background": 0.28,
+        "misclassified": 0.428,
+        "top_confusion": "car"
+      },
+      "truck": {
+        "correct": 0.381,
+        "missed_as_background": 0.435,
+        "misclassified": 0.184,
+        "top_confusion": "car"
+      },
+      "tricycle": {
+        "correct": 0.166,
+        "missed_as_background": 0.57,
+        "misclassified": 0.264,
+        "top_confusion": "motor"
+      },
+      "awning-tricycle": {
+        "correct": 0.098,
+        "missed_as_background": 0.613,
+        "misclassified": 0.289,
+        "top_confusion": "tricycle"
+      },
+      "bus": {
+        "correct": 0.464,
+        "missed_as_background": 0.382,
+        "misclassified": 0.155,
+        "top_confusion": "truck"
+      },
+      "motor": {
+        "correct": 0.296,
+        "missed_as_background": 0.662,
+        "misclassified": 0.043,
+        "top_confusion": "pedestrian"
+      }
+    },
+    "error_split_conf": 0.25,
+    "error_split_iou": 0.45
+  },
+  "label_scale": {
+    "split": "test",
+    "boxes": 75102,
+    "images": 1610,
+    "share_pct_coco_at_640": {
+      "small_lt_32x32px": 93.2,
+      "medium_32_to_96px": 6.7,
+      "large_gt_96x96px": 0.2
+    },
+    "median_box_area_pct_of_frame": 0.0395,
+    "median_box_side_px": {
+      "at_640": 9.8,
+      "at_1024": 15.8
+    },
+    "source_dims_seen": {
+      "1400x788": 933,
+      "1400x1050": 274,
+      "1360x765": 167,
+      "1916x1078": 151,
+      "960x540": 49,
+      "1920x1080": 36
+    },
+    "class_balance": {
+      "car": 28074,
+      "pedestrian": 21006,
+      "people": 6376,
+      "motor": 5845,
+      "van": 5771,
+      "bus": 2940,
+      "truck": 2659,
+      "bicycle": 1302,
+      "awning-tricycle": 599,
+      "tricycle": 530
+    }
+  },
+  "config": {
+    "weights": "runs/n_1024/weights/best.pt",
+    "data": "docker/VisDrone.yaml (path overridden to local VisDrone directory)",
+    "imgsz": 1024,
+    "split": "test"
+  },
+  "provenance": {
+    "checkpoint_release": "https://github.com/Kenchch/aerial-small-object-detection/releases/tag/v1.0",
+    "checkpoint_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
+    "run_date": "2026-09-06",
+    "split": "VisDrone2019-DET test-dev (labelled test split)",
+    "torch": "2.6.0+cu124",
+    "ultralytics": "8.4.110",
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "selection": "The v1.0 checkpoint was selected using validation results; test-dev was evaluated after selection."
+  }
+}

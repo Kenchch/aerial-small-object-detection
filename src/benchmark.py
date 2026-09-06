@@ -305,10 +305,16 @@ def _environment(imgsz: int) -> dict:
     Milliseconds without the GPU, the driver stack and the iteration counts are
     a number nobody can reproduce or compare against their own hardware.
     """
+    import os
+    import platform
+
     import onnxruntime as ort
     import torch
 
     env = {
+        "cpu": platform.processor(),
+        "logical_cpu_count": os.cpu_count(),
+        "ort_intra_op_num_threads": ort.SessionOptions().intra_op_num_threads,
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "cuda": torch.version.cuda,
         "cudnn": torch.backends.cudnn.version(),
@@ -588,7 +594,7 @@ def main() -> None:
     p.add_argument(
         "--map-tolerance",
         type=_map_tolerance,
-        default=0.01,
+        default=0.002,
         help="Fail if ONNX mAP differs from PyTorch by more than "
         "this. An export is meant to change speed, not the model.",
     )

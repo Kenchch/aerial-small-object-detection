@@ -61,3 +61,22 @@ Tests use stubs and committed reports; they do not establish GPU performance.
 - Ultralytics and published weights use AGPL-3.0; see [licence and attribution](docs/DESIGN.md#licence-and-attribution).
 
 [Design notes](docs/DESIGN.md)
+
+The v1.0 checkpoint was selected on validation data. A separate labelled
+**test-dev** evaluation at 1024 pixels produced **mAP50 0.3183 / mAP50–95 0.1831**;
+see [test-dev evidence](reports/evaluation_test.json). Run `src/evaluate.py` with
+`--split test` against the labelled test-dev split to reproduce it.
+Tracking accepts `--report <path>` for separate repeated-run records. ONNX
+validation now defaults to an absolute mAP tolerance of 0.002.
+The opt-in GPU smoke test uses `RUN_GPU=1` and `AERIAL_TEST_IMAGE=<local image>`
+with `pytest -m gpu`; it downloads and SHA-verifies the v1.0 checkpoint.
+
+[FP16 ONNX validation](reports/benchmark_fp16.json) reached mAP50–95 **0.2209**
+on val. Its transfer-inclusive `session.run` latency was **8.59 ms median /
+17.16 ms p95** (batch 1, 10 warm-ups, 100 timed iterations; preprocessing and
+NMS excluded). Reproduce with `python scripts/benchmark_fp16.py --weights
+<best.pt> --data <dataset.yaml>`.
+[Five tracking repeats](reports/tracking_repeats/summary.json), each decoding and
+encoding the same 90-frame synthetic pan, gave **8.4 FPS median**, range
+**7.2–8.9 FPS**. These are machine-specific measurements, not general edge-device
+performance. Rebuild that summary with `python scripts/summarize_tracking.py`.
