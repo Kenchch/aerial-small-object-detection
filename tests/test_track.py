@@ -572,3 +572,28 @@ def test_a_failing_video_replace_publishes_neither(tmp_path, monkeypatch):
         assert after == before, "the report was published without its video"
     finally:
         (reports / "tracking.json.tmp").unlink(missing_ok=True)
+
+
+def test_successful_main_publishes_custom_report(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
+    report = tmp_path / "profile" / "custom.json"
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--report", str(report)])
+    track.main()
+    assert out.is_file()
+    evidence = json.loads(report.read_text())
+    assert evidence["output"]["frames"] == 4
+    assert not report.with_suffix(".json.tmp").exists()
+
+
+@pytest.mark.parametrize("collision", ["source", "weights", "out"])
+def test_report_cannot_replace_inputs_or_video(tmp_path, monkeypatch, collision):
+    import sys
+
+    source, out, _ = _run(monkeypatch, tmp_path, frames_in=1, frames_back=1)
+    target = {"source": source, "weights": Path("w.pt"), "out": out}[collision]
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--report", str(target)])
+    with pytest.raises(SystemExit, match="must differ"):
+        track.main()

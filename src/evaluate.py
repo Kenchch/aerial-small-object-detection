@@ -100,11 +100,13 @@ def letterbox_scale(W: int, H: int, imgsz: int) -> float:
     return imgsz / max(W, H)
 
 
-def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> dict:
+def per_class_table(
+    weights: Path, data: str, imgsz: int, device: str = "0", split: str = "val"
+) -> dict:
     from ultralytics import YOLO
 
     model = YOLO(str(weights))
-    m = model.val(data=data, imgsz=imgsz, device=device, verbose=False)
+    m = model.val(data=data, imgsz=imgsz, device=device, split=split, verbose=False)
     names = m.names
 
     print(f"\n{'=' * 66}")
@@ -141,7 +143,12 @@ def per_class_table(weights: Path, data: str, imgsz: int, device: str = "0") -> 
     # here, and this pass's own mAP is meaningless (a 0.25 floor cuts the curve
     # off) and is deliberately discarded.
     cm_metrics = model.val(
-        data=data, imgsz=imgsz, device=device, conf=CONFUSION_CONF, verbose=False
+        data=data,
+        imgsz=imgsz,
+        device=device,
+        split=split,
+        conf=CONFUSION_CONF,
+        verbose=False,
     )
     confusion = error_split(cm_metrics.confusion_matrix.matrix, names)
 
@@ -370,10 +377,8 @@ def main() -> None:
     p.add_argument(
         "--split",
         default="val",
-        help="Which split's labels to characterise. Accuracy is "
-        "only reported for 'val' -- scoring the model on the "
-        "data it was fitted to would be a misleading number to "
-        "publish, so other splits emit label statistics only.",
+        choices=("train", "val", "test"),
+        help="Report accuracy on val or labelled test-dev; train emits label statistics only.",
     )
     p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
     p.add_argument(
@@ -395,8 +400,10 @@ def main() -> None:
 
     report = {
         "accuracy": (
-            per_class_table(args.weights, args.data, args.imgsz, args.device)
-            if args.split == "val"
+            per_class_table(
+                args.weights, args.data, args.imgsz, args.device, args.split
+            )
+            if args.split in {"val", "test"}
             else None
         ),
         "label_scale": label_size_distribution(args.data, args.split, args.imgsz),

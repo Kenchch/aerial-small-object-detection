@@ -1,6 +1,5 @@
-# Developed on Windows; text files are already CRLF throughout, so keep that
-# instead of git's default LF normalization (avoids renormalization churn).
-* text=auto eol=crlf
+* text=auto
+.mailmap text eol=lf
 
 # Binary assets -- never diff or line-ending convert these.
 *.png binary
@@ -14,3 +13,5 @@
 # Self-contained report bundles, not hand-written source -- exclude from
 # GitHub's language detection so it reports the Python in src/, not this HTML.
 reports/*.html linguist-generated=true
+
+*.sh text eol=lf
