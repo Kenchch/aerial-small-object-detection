@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src import evaluate
+import evaluate
 
 
 def test_both_validation_passes_use_test_split(monkeypatch):
