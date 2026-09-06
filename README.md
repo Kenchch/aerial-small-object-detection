@@ -748,10 +748,3 @@ does not assume commercial reuse rights. Demo media derived from VisDrone
 frames is provided for research demonstration only. See
 [`NOTICE`](NOTICE) for links and the dataset citation.
 
-## How this was built
-
-Built with AI pair-programming (Claude Code and OpenAI Codex) for drafting,
-refactoring and test scaffolding. I set the detection problem, chose the data
-and evaluation rules, ran every benchmark on my own hardware, and reviewed and
-edited the code. Commits where an assistant contributed code retain a
-`Co-Authored-By` trailer.
