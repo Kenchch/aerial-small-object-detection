@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: If you refer to this work, please cite it as below.
+title: Small-Object Detection on Drone Imagery
+abstract: >-
+  YOLO11n trained and evaluated on VisDrone2019, exported to ONNX and profiled
+  across backends, with a tracking pipeline and measured accuracy/latency
+  trade-offs. The code in src/ and tests/ is MIT; the published weights and
+  their ONNX export are AGPL-3.0, because they are fine-tuned from an
+  Ultralytics checkpoint. VisDrone2019 is copyright the AISKYEYE team at
+  Tianjin University and is not redistributed here. See NOTICE.
+authors:
+  - family-names: Jiang
+    given-names: Feng
+repository-code: https://github.com/Kenchch/aerial-small-object-detection
+license: MIT
