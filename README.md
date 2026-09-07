@@ -88,3 +88,5 @@ and reviewed every diff; Claude Code and OpenAI Codex drafted code, refactored
 and scaffolded tests. The full note — including the `Co-Authored-By` trailers
 removed from this repository's history on 6 September 2026 — is on my profile:
 [How I use AI tools](https://github.com/Kenchch/Kenchch#how-i-use-ai-tools).
+
+Runtime upgrade decisions are recorded in [dependency review](docs/DEPENDENCIES.md).
