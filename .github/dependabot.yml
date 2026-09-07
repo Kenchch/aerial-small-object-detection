@@ -15,3 +15,15 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+
+    # Reviewed benchmark-runtime proposals; see docs/DEPENDENCIES.md.
+    # Narrow version ignores leave other upgrades visible for future review.
+    ignore:
+      - dependency-name: numpy
+        versions: [">=2.5,<3"] # Python 3.11 is still supported by this project.
+      - dependency-name: torch
+        versions: ["2.14.*"]
+      - dependency-name: onnxruntime-gpu
+        versions: ["1.29.*"]
+      - dependency-name: ultralytics
+        versions: ["8.4.138"]
