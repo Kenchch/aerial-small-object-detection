@@ -151,3 +151,24 @@ jobs:
               || { echo "src/$s.py --help failed inside the image"; exit 1; }
             echo "  src/$s.py OK"
           done
+
+      # The image is documented as runnable without root, and nothing here had
+      # ever checked that. Run it as a non-root UID against a mount that UID
+      # owns, which is the arrangement the Dockerfile tells people to use.
+      #
+      # This is also why there is no `USER` line to test: a hardcoded UID fails
+      # on any mount it does not own, and Docker creates named volumes
+      # root-owned. Passing --user is the only form that survives both.
+      - name: The image runs as a non-root user
+        run: |
+          mkdir -p nonroot-out && chmod 777 nonroot-out
+          docker run --rm --user 12345:12345 -v "$PWD/nonroot-out:/out" \
+            --entrypoint python aerial-detection -c "
+          import os, pathlib, ultralytics
+          assert os.getuid() == 12345, os.getuid()
+          pathlib.Path('/out/probe').write_text('written by a non-root user')
+          print('  ultralytics', ultralytics.__version__, 'imported as', os.getuid())
+          print('  YOLO_CONFIG_DIR =', os.environ['YOLO_CONFIG_DIR'])
+          "
+          test -f nonroot-out/probe || { echo "the non-root user could not write /out"; exit 1; }
+          echo "  /out is writable by the mount's owner"
