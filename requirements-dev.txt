@@ -1,4 +1,4 @@
 # Offline tests do not require the GPU runtime.
-pytest>=8,<10
+pytest>=9.1.1,<10
 numpy>=2,<3
 ruff>=0.16,<0.17
