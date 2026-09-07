@@ -14,7 +14,7 @@ torchvision==0.21.0
 ultralytics==8.4.110
 onnx==1.22.0
 onnxslim==0.1.94
-onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
+onnxruntime-gpu==1.29.0  # CUDA 12 line -- see README engineering notes
 
 # Read from the conda env this project runs in, not chosen -- and that env
 # reproduces the committed metrics exactly (mAP50 0.3748 / mAP50-95 0.2216 from
