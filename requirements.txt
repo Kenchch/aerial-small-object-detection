@@ -11,7 +11,7 @@ torchvision==0.21.0
 # on, and the .val() pass that produces every mAP figure in the README. An
 # unpinned ultralytics means the committed metrics are reproducible only by
 # whoever installs on the same day.
-ultralytics==8.4.110
+ultralytics==8.4.137
 onnx==1.22.0
 onnxslim==0.1.94
 onnxruntime-gpu==1.20.2  # CUDA 12 line -- see README engineering notes
