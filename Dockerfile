@@ -43,6 +43,26 @@ COPY docker/VisDrone.yaml ./docker/VisDrone.yaml
 # nobody asked for.
 VOLUME ["/weights", "/data", "/out"]
 
+# Run as your own user, not root:
+#
+#   docker run --user "$(id -u):$(id -g)" --gpus all -v "$PWD/reports:/out" ...
+#
+# The image needs no root: the only thing it writes is /out, and matching the
+# container UID to the host directory's owner is what makes that writable.
+# There is deliberately no `USER` line. Hardcoding one guesses the host's UID:
+# a mount owned by anyone else -- a named volume, which Docker creates
+# root-owned, or a host account that is not 1000 -- fails with EACCES on the
+# first write. Passing --user at run time is the only form that is correct for
+# whoever is actually running it.
+#
+# HOME is / in this base image and is not writable by a non-root user, so
+# Ultralytics falls back to /tmp with a warning on every run. Name the
+# directory instead of relying on that fallback. Ultralytics appends
+# "Ultralytics" to this, so /tmp gives /tmp/Ultralytics -- the same path the
+# fallback picks, reached deliberately and without the warning.
+ENV YOLO_CONFIG_DIR=/tmp
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
 # A real default. `--help` as the CMD made `docker run <image>` a no-op that
 # proved only that Python starts - which is exactly the "Docker was added to
 # tick a box" impression it gives.
