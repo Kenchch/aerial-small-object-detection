@@ -3,7 +3,7 @@
 # Pinned to what was actually tested; an unpinned "torch" here would let pip
 # resolve a newer release with no guarantee it still supports CUDA 12.4.
 torch==2.6.0
-torchvision==0.21.0
+torchvision==0.29.0
 
 # ultralytics is pinned for the same reason torch is, and matters more: it owns
 # the training loop, the augmentation defaults this project deliberately does
