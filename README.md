@@ -15,7 +15,7 @@ for studying accuracy, GPU placement and inference latency on a laptop GPU.
 | ONNX CUDA core latency | 10.4 ms; 17% faster than eager |
 | CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0007 |
 | ONNX CPU | Approximately 12× slower than ONNX CUDA in this benchmark |
-| Object scale / tracking | 92.4% of validation boxes small at 640 px; derived steady-state 25.8 FPS |
+| Object scale / tracking | 92.4% of validation boxes small at 640 px; 22.9 FPS steady-state, median of five repeats (17.8-24.9) |
 
 Latency is reproducible within a session and not across them. Three
 consecutive runs of `src/benchmark.py` on the same machine and checkpoint gave
