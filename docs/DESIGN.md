@@ -364,10 +364,25 @@ and the median (32.21 ms), which is why this clip's end-to-end throughput
 (**9.5 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a detect+track-only
-figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
-distinction matters for short-clip batch processing versus a long-running
-stream.
+— which for this run gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a
+detect+track-only figure would suggest, and nothing like the 87 FPS the ONNX row
+implies. That distinction matters for short-clip batch processing versus a
+long-running stream.
+
+**One run is not a rate, and this one was the fastest.** Repeating the same
+protocol in five separate processes and applying the same derivation to each
+gives 40.14, 41.22, 43.75, 48.74 and 56.29 ms/frame — a median of **43.75 ms,
+22.9 FPS**, with a range of 17.8 to 24.9 FPS. The 38.72 ms above is not the
+middle of that spread; it is faster than all five, so quoting it as the headline
+was quoting the best run rather than the typical one. The first screen now
+carries the median and the range, and [the repeat
+summary](../reports/tracking_repeats/summary.json) records both, derived by
+`scripts/summarize_tracking.py` from the five committed reports rather than
+retyped.
+
+Summing per-stage medians is also what excludes the cold start: the first frame
+costs about 180x a normal one, which moves a mean over 90 frames and does not
+move a median.
 
 Association statistics — not association *quality*, which cannot be stated
 without ground-truth track ids this clip does not have: 306 unique tracks,

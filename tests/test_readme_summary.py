@@ -142,6 +142,10 @@ def test_tracking_repeats_match_their_summary():
     assert f"**{fps['median']:.1f} FPS median**" in readme
     assert f"{fps['min']:.1f}-{fps['max']:.1f} FPS" in readme
 
+    steady = s["statistics"]["steady_state_fps"]
+    assert f"{steady['median']:.1f} FPS steady-state" in readme
+    assert f"({steady['min']:.1f}-{steady['max']:.1f})" in readme
+
     # The README writes the repeat count as a word, so `str(s["runs"])` would
     # be a bare "5" matched anywhere in the file -- an assertion that passes
     # whatever the report says. Same for the frame count.
@@ -180,6 +184,40 @@ def test_design_parity_paragraph_matches_the_benchmark():
     )
 
 
+def test_design_states_every_repeat_and_the_median_it_took():
+    """DESIGN.md lists all five per-run figures, not just the summary.
+
+    The paragraph's argument is that the published headline sat outside the
+    spread, which a reader can only check if the spread is on the page. Five
+    numbers typed into prose is five chances to leave one behind.
+    """
+    s = json.loads(
+        (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
+    )
+    stats = s["statistics"]
+    design = _design()
+
+    per_run = sorted(
+        round(
+            sum(
+                json.loads(p.read_text(encoding="utf-8"))["stage_ms_median"][stage]
+                for stage in ("decode", "detect_and_track", "annotate", "encode")
+            ),
+            2,
+        )
+        for p in (ROOT / "reports/tracking_repeats").glob("run_*.json")
+    )
+    assert ", ".join(f"{ms:.2f}" for ms in per_run[:-1]) in design
+    assert f"and {per_run[-1]:.2f} ms/frame" in design
+
+    # The claim wraps across a line, so match its two halves rather than
+    # pinning the document's line breaks into a test.
+    ms, fps = stats["steady_state_frame_ms"], stats["steady_state_fps"]
+    assert f"median of **{ms['median']:.2f} ms," in design
+    assert f"{fps['median']:.1f} FPS**" in design
+    assert f"range of {fps['min']:.1f} to {fps['max']:.1f} FPS" in design
+
+
 def test_design_tolerance_matches_the_constant():
     """The prose names the constant, so it has to name its value correctly."""
     from benchmark import MAP_TOLERANCE  # src/ is on sys.path via conftest
@@ -214,3 +252,43 @@ def test_a_changed_report_would_fail_these_assertions():
         "a latency 1 ms off the report also appears in the README, so the "
         "latency assertion proves nothing"
     )
+
+
+def test_the_steady_state_headline_is_not_a_single_run():
+    """The first screen quoted 25.8 FPS, derived from one run, and that run was
+    faster than all five repeats -- the headline was the best result rather
+    than the typical one. Nothing may re-enter the README that sits outside the
+    measured spread.
+    """
+    s = json.loads(
+        (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
+    )
+    steady = s["statistics"]["steady_state_fps"]
+    single = _report("tracking.json")["stage_ms_median"]
+    derived = 1000 / sum(
+        single[stage] for stage in ("decode", "detect_and_track", "annotate", "encode")
+    )
+    assert derived > steady["max"], (
+        "the single committed run is no longer faster than every repeat, so "
+        "this test's premise has changed and the DESIGN.md paragraph that "
+        "states it needs rechecking"
+    )
+    assert f"{derived:.1f} FPS steady-state" not in _readme(), (
+        "the first screen is quoting the single run's rate again"
+    )
+
+
+def test_the_summary_reports_the_steady_state_it_can_derive():
+    """summarize_tracking.py sums the four per-frame stage medians. If a repeat
+    report stops carrying one of them, the summary would silently describe a
+    different quantity under the same name."""
+    s = json.loads(
+        (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
+    )
+    runs = sorted((ROOT / "reports/tracking_repeats").glob("run_*.json"))
+    assert len(runs) == s["runs"]
+    for path in runs:
+        stages = json.loads(path.read_text(encoding="utf-8"))["stage_ms_median"]
+        assert set(stages) == {"decode", "detect_and_track", "annotate", "encode"}, (
+            f"{path.name} carries stages the summary does not sum: {sorted(stages)}"
+        )
