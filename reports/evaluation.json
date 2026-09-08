@@ -170,8 +170,24 @@
   },
   "config": {
     "weights": "runs/n_1024/weights/best.pt",
-    "data": "VisDrone.yaml",
+    "data": "docker/VisDrone.yaml",
     "imgsz": 1024,
     "split": "val"
+  },
+  "provenance": {
+    "run_date": "2026-09-08",
+    "checkpoint_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
+    "split": "VisDrone2019-DET val",
+    "data": "docker/VisDrone.yaml",
+    "imgsz": 1024,
+    "device": "0",
+    "torch": "2.6.0+cu124",
+    "ultralytics": "8.4.110",
+    "cuda": "12.4",
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "selection": "The v1.0 checkpoint was selected using validation results; test-dev was evaluated after selection.",
+    "data_root_overridden": true,
+    "checkpoint_release": "https://github.com/Kenchch/aerial-small-object-detection/releases/tag/v1.0",
+    "checkpoint_release_tag": "v1.0"
   }
 }

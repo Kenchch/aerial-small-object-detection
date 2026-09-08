@@ -361,6 +361,122 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     }
 
 
+# The checkpoint every committed figure was produced with. Pinned here, not
+# just in tests/test_gpu.py, so a report can say whether the weights it ran
+# against are the released ones rather than leaving a reader to compare
+# hex by hand.
+RELEASE_TAG = "v1.0"
+RELEASE_URL = (
+    "https://github.com/Kenchch/aerial-small-object-detection/releases/tag/v1.0"
+)
+RELEASE_SHA256 = "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e"
+
+# True of this project's method regardless of which split is being evaluated,
+# which is why it is a constant rather than a field someone types per run. It
+# is also the sentence a reader needs before comparing the two files.
+SELECTION_NOTE = (
+    "The v1.0 checkpoint was selected using validation results; "
+    "test-dev was evaluated after selection."
+)
+
+SPLIT_DESCRIPTIONS = {
+    "train": "VisDrone2019-DET train",
+    "val": "VisDrone2019-DET val",
+    "test": "VisDrone2019-DET test-dev (labelled test split)",
+}
+
+
+def _with_data_root(data: str, root: Path) -> Path:
+    """A copy of `data` whose `path:` points at `root`, written beside the run.
+
+    The committed spec is docker/VisDrone.yaml, and its `path:` is /data --
+    where the container mounts the dataset. Evaluating on a workstation means
+    pointing that somewhere else, and the previous run recorded the fact as a
+    parenthetical: "docker/VisDrone.yaml (path overridden to local VisDrone
+    directory)". That is a note, not a record; nothing can act on it.
+
+    Rewriting the spec into a temporary file instead lets the report name the
+    committed spec and flag the override as a field, without an absolute path
+    from one machine reaching a committed file.
+    """
+    import os
+    import tempfile
+
+    import yaml
+
+    spec = yaml.safe_load(Path(data).read_text(encoding="utf-8"))
+    spec["path"] = str(root)
+    # mkstemp rather than NamedTemporaryFile: the file has to outlive this
+    # function so ultralytics can read it, which means delete=False, and a
+    # NamedTemporaryFile opened that way is a context manager whose exit does
+    # nothing useful.
+    descriptor, name = tempfile.mkstemp(suffix=".yaml")
+    os.close(descriptor)
+    written = Path(name)
+    written.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    return written
+
+
+def _portable(path_or_name: str | Path) -> str:
+    """A repository-relative path, or a bare name for anything outside it.
+
+    These strings land in a committed report. An absolute path from whichever
+    machine last ran the evaluation says nothing to anyone else and quietly
+    identifies a directory layout; the same reasoning that keeps the cuDNN
+    directory out of benchmark.json.
+    """
+    resolved = Path(path_or_name).expanduser()
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        return Path(path_or_name).name
+    if resolved.is_relative_to(PROJECT_ROOT):
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    return resolved.name
+
+
+def _provenance(
+    weights: Path, data: str, imgsz: int, device: str, split: str, data_root: str | None
+) -> dict:
+    """What the accuracy figures need beside them to mean anything.
+
+    This was typed by hand into reports/evaluation_test.json and absent
+    altogether from reports/evaluation.json, which is the usual outcome: the
+    file that someone remembered has provenance, the file that came first does
+    not, and neither can be checked. Everything below is read from the run.
+    """
+    import datetime
+    import hashlib
+
+    import torch
+    import ultralytics
+
+    digest = hashlib.sha256(Path(weights).read_bytes()).hexdigest()
+    provenance = {
+        "run_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+        "checkpoint_sha256": digest,
+        "split": SPLIT_DESCRIPTIONS.get(split, split),
+        "data": _portable(data),
+        "imgsz": imgsz,
+        "device": device,
+        "torch": torch.__version__,
+        "ultralytics": ultralytics.__version__,
+        "cuda": torch.version.cuda,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "selection": SELECTION_NOTE,
+        # A fact about the run, not an apology in a string: the spec above is
+        # the committed one, and its `path:` was pointed elsewhere.
+        "data_root_overridden": data_root is not None,
+    }
+    # Claimed only when it is true. A checkpoint that is not the released one
+    # is a perfectly valid thing to evaluate; saying it came from the release
+    # would not be.
+    if digest == RELEASE_SHA256:
+        provenance["checkpoint_release"] = RELEASE_URL
+        provenance["checkpoint_release_tag"] = RELEASE_TAG
+    return provenance
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--weights", required=True, type=Path)
@@ -382,6 +498,14 @@ def main() -> None:
     )
     p.add_argument("--device", default="0", help="'0' for GPU, or 'cpu'.")
     p.add_argument(
+        "--data-root",
+        default=None,
+        help="Directory holding images/ and labels/, overriding the spec's "
+        "`path:`. Use this rather than editing the spec or writing a local "
+        "copy: the report then names the committed spec and records the "
+        "override as a field, instead of embedding one machine's path.",
+    )
+    p.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -398,23 +522,35 @@ def main() -> None:
             else f"evaluation_{args.split}.json"
         )
 
+    # Everything downstream reads the resolved spec; only the report names the
+    # committed one.
+    spec = (
+        str(_with_data_root(args.data, Path(args.data_root)))
+        if args.data_root
+        else args.data
+    )
+
     report = {
         "accuracy": (
-            per_class_table(
-                args.weights, args.data, args.imgsz, args.device, args.split
-            )
+            per_class_table(args.weights, spec, args.imgsz, args.device, args.split)
             if args.split in {"val", "test"}
             else None
         ),
-        "label_scale": label_size_distribution(args.data, args.split, args.imgsz),
+        "label_scale": label_size_distribution(spec, args.split, args.imgsz),
         "config": {
-            "weights": Path(args.weights).resolve().relative_to(PROJECT_ROOT).as_posix()
-            if Path(args.weights).resolve().is_relative_to(PROJECT_ROOT)
-            else str(args.weights),
-            "data": args.data,
+            "weights": _portable(args.weights),
+            "data": _portable(args.data),
             "imgsz": args.imgsz,
             "split": args.split,
         },
+        "provenance": _provenance(
+            args.weights,
+            args.data,
+            args.imgsz,
+            args.device,
+            args.split,
+            args.data_root,
+        ),
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -422,7 +558,9 @@ def main() -> None:
     # by something other than Python. Any NaN/Infinity that reaches here is a
     # bug in a metric, and failing loudly beats emitting a file that jq and
     # JSON.parse reject.
-    args.out.write_text(json.dumps(report, indent=2, allow_nan=False))
+    # Trailing newline: evaluation_test.json had one and evaluation.json did
+    # not, because one was hand-edited and the other written here.
+    args.out.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"\n  metrics -> {args.out}")
 
 
