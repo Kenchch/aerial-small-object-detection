@@ -16,14 +16,31 @@ updates:
       interval: monthly
     open-pull-requests-limit: 5
 
-    # Reviewed benchmark-runtime proposals; see docs/DEPENDENCIES.md.
-    # Narrow version ignores leave other upgrades visible for future review.
+    # The runtime below is a measured configuration, not a preference: every
+    # mAP, latency and placement figure this repository publishes was produced
+    # on exactly these versions, and CPU CI cannot show that a newer one keeps
+    # them. Accepting an upgrade means re-running the benchmarks on the GPU and
+    # replacing the published numbers -- a deliberate piece of work, never a
+    # merged Dependabot PR. See docs/DEPENDENCIES.md.
+    #
+    # These were previously ignored version by version, which did not hold: the
+    # narrow ignores named torch 2.14.*, onnxruntime-gpu 1.29.*, ultralytics
+    # 8.4.138 and numpy >=2.5, and Dependabot then opened #16 (torch 2.13.0),
+    # #14 (ultralytics 8.4.137), #15 (numpy 2.4.6) and #17 (torchvision 0.29.0,
+    # never ignored at all) -- the same decision, re-asked under four version
+    # numbers that happened not to be on the list. The decision is about the
+    # dependency, so the ignore is too.
+    #
+    # This stops version-update pull requests. It is not the security control:
+    # CI runs `pip-audit -r requirements.txt --strict` on every push with a
+    # listed set of accepted advisory IDs, so a new advisory against any of
+    # these pins fails the build whether or not a bot opens a PR.
     ignore:
-      - dependency-name: numpy
-        versions: [">=2.5,<3"] # Python 3.11 is still supported by this project.
       - dependency-name: torch
-        versions: ["2.14.*"]
-      - dependency-name: onnxruntime-gpu
-        versions: ["1.29.*"]
+      - dependency-name: torchvision
       - dependency-name: ultralytics
-        versions: ["8.4.138"]
+      - dependency-name: onnx
+      - dependency-name: onnxslim
+      - dependency-name: onnxruntime-gpu
+      - dependency-name: opencv-python
+      - dependency-name: numpy

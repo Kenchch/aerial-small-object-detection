@@ -39,7 +39,12 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install pytest ruff pip-audit numpy
+          # PyYAML is here to read .github/dependabot.yml, not to run the
+          # project: test_dependabot_config.py checks that the ignore list
+          # names packages requirements.txt actually pins. It is a project
+          # dependency already, so this adds nothing the bare clone would not
+          # have anyway.
+          pip install pytest ruff pip-audit numpy PyYAML
 
       - name: Lint
         run: ruff check .
