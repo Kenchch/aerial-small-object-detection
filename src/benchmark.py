@@ -26,6 +26,7 @@ Usage
 import argparse
 import json
 import math
+import os
 import shutil
 import statistics
 import time
@@ -47,6 +48,46 @@ ONNX_OPSET = 13
 # read by both.
 ONNX_SIMPLIFY = True  # onnxslim folds constants; smaller, faster to load
 ONNX_DYNAMIC = False  # static shapes let ORT pick better kernels
+
+
+def _register_cudnn() -> bool:
+    """Put cuDNN on the DLL search path on Windows, and say whether it worked.
+
+    onnxruntime-gpu does not bundle cuDNN. On Linux the wheel's RPATH usually
+    finds a system copy; on Windows nothing does, so
+    `onnxruntime_providers_cuda.dll` fails to load with error 126 and ORT falls
+    back to CPU with only a log line to say so. Measured here: a session asked
+    for CUDAExecutionProvider and reported `['CPUExecutionProvider']`.
+
+    verify_cuda_placement below refuses to report that as a GPU number, which is
+    the important half. This is the other half: torch already ships cuDNN 9 in
+    its own lib directory, so pointing the loader at it makes the provider
+    available rather than making the benchmark unrunnable.
+
+    Returns True if a directory was added, False if there was nothing to do.
+    The path itself is deliberately not recorded: it is wherever this machine
+    happens to have installed torch, which is noise in a committed report.
+    """
+    if not hasattr(os, "add_dll_directory"):
+        return False  # not Windows
+    try:
+        import torch
+    except ImportError:
+        return False
+    lib = Path(torch.__file__).resolve().parent / "lib"
+    if not any(lib.glob("cudnn*.dll")):
+        return False
+    os.add_dll_directory(str(lib))
+    return True
+
+
+# One number, three places used to disagree: the CLI defaulted to 0.002, the
+# function it calls defaulted to 0.01, and DESIGN.md quoted 0.01. Whichever a
+# reader checked, one of the others was wrong. The measured delta is 0.0007, so
+# 0.002 is the tolerance that would actually catch a regression; 0.01 is loose
+# enough to pass an export that changed the model.
+MAP_TOLERANCE = 0.002
+
 WARMUP_ITERS = 20
 TIMED_ITERS = 100
 
@@ -175,6 +216,8 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     outright error. So verify what actually got bound and record it.
     """
     import numpy as np
+
+    _register_cudnn()
     import onnxruntime as ort
 
     sess = ort.InferenceSession(str(onnx_path), providers=[provider])
@@ -236,6 +279,7 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
 
     opts = ort.SessionOptions()
     opts.enable_profiling = True
+    _register_cudnn()
     sess = ort.InferenceSession(
         str(onnx_path), opts, providers=["CUDAExecutionProvider"]
     )
@@ -321,6 +365,7 @@ def _environment(imgsz: int) -> dict:
         "torch": torch.__version__,
         "onnxruntime": ort.__version__,
         "providers": ort.get_available_providers(),
+        "cudnn_from_torch": _register_cudnn(),
         "imgsz": imgsz,
         "batch_size": 1,
         "warmup_iters": WARMUP_ITERS,
@@ -461,7 +506,7 @@ def run_one(
     imgsz: int,
     data: str,
     device: str = "0",
-    map_tolerance: float = 0.01,
+    map_tolerance: float = MAP_TOLERANCE,
     cache_dir: Path | None = None,
     allow_cpu_fallback: bool = False,
 ) -> dict:
@@ -594,7 +639,7 @@ def main() -> None:
     p.add_argument(
         "--map-tolerance",
         type=_map_tolerance,
-        default=0.002,
+        default=MAP_TOLERANCE,
         help="Fail if ONNX mAP differs from PyTorch by more than "
         "this. An export is meant to change speed, not the model.",
     )

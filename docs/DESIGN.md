@@ -228,9 +228,9 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 11.74 ms · 85.2 FPS | 14.48 ms · 69.1 FPS |
-| ONNX Runtime (CUDA) | **9.27 ms · 107.9 FPS** | **11.49 ms · 87.0 FPS** |
-| ONNX Runtime (CPU) | 102.94 ms · 9.7 FPS | 102.94 ms · 9.7 FPS |
+| PyTorch (CUDA, eager) | 12.51 ms · 80.0 FPS | 15.22 ms · 65.7 FPS |
+| ONNX Runtime (CUDA) | **10.43 ms · 95.8 FPS** | **12.68 ms · 78.8 FPS** |
+| ONNX Runtime (CPU) | 124.01 ms · 8.1 FPS | 124.01 ms · 8.1 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
@@ -258,7 +258,7 @@ onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
 **The export is validated, not assumed.** Latency beside a PyTorch mAP
 invites the reader to take it that ONNX kept the accuracy, which is an
 assumption: opset choice, constant folding and precision can all move it.
-Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds 0.01. The `.onnx` also carries the
+Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds MAP_TOLERANCE, 0.002. The `.onnx` also carries the
 sha256 of the checkpoint it came from, so retraining forces a re-export
 rather than benchmarking yesterday's graph against today's weights.
 

@@ -11,10 +11,18 @@ for studying accuracy, GPU placement and inference latency on a laptop GPU.
 |---|---|
 | Training | YOLO11n, 1024 px, 50 epochs, RTX 2070 Max-Q |
 | Standalone validation | mAP50 0.375 / mAP50-95 0.222 |
-| ONNX CUDA core latency | 9.3 ms; 21% faster than eager |
+| ONNX CUDA core latency | 10.4 ms; 17% faster than eager |
 | CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0007 |
-| ONNX CPU | Approximately 11× slower than ONNX CUDA in this benchmark |
+| ONNX CPU | Approximately 12× slower than ONNX CUDA in this benchmark |
 | Object scale / tracking | 92.4% of validation boxes small at 640 px; derived steady-state 25.8 FPS |
+
+Latency is reproducible within a session and not across them. Three
+consecutive runs of `src/benchmark.py` on the same machine and checkpoint gave
+ONNX CUDA core medians of 10.35, 10.37 and 10.43 ms — a spread under 1% — while
+an earlier session on the same GPU recorded 9.3 ms. The 100 timed iterations
+behind each median control the noise inside a run; they say nothing about
+driver version, thermal state or what else the machine was doing. Read these as
+one machine's numbers on one day, not as a device specification.
 
 The tracking FPS is derived from stage medians, not measured end-to-end throughput.
 See [benchmark](reports/benchmark.json), [tracking](reports/tracking.json) and
