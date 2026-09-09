@@ -228,9 +228,9 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 11.74 ms · 85.2 FPS | 14.48 ms · 69.1 FPS |
-| ONNX Runtime (CUDA) | **9.27 ms · 107.9 FPS** | **11.49 ms · 87.0 FPS** |
-| ONNX Runtime (CPU) | 102.94 ms · 9.7 FPS | 102.94 ms · 9.7 FPS |
+| PyTorch (CUDA, eager) | 12.51 ms · 80.0 FPS | 15.22 ms · 65.7 FPS |
+| ONNX Runtime (CUDA) | **10.43 ms · 95.8 FPS** | **12.68 ms · 78.8 FPS** |
+| ONNX Runtime (CPU) | 124.01 ms · 8.1 FPS | 124.01 ms · 8.1 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
@@ -258,7 +258,7 @@ onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
 **The export is validated, not assumed.** Latency beside a PyTorch mAP
 invites the reader to take it that ONNX kept the accuracy, which is an
 assumption: opset choice, constant folding and precision can all move it.
-Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds 0.01. The `.onnx` also carries the
+Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds MAP_TOLERANCE, 0.002. The `.onnx` also carries the
 sha256 of the checkpoint it came from, so retraining forces a re-export
 rather than benchmarking yesterday's graph against today's weights.
 
@@ -364,10 +364,25 @@ and the median (32.21 ms), which is why this clip's end-to-end throughput
 (**9.5 FPS**) is well below its steady-state rate.
 Steady state has to sum every stage's median, not just the largest one — decode,
 annotate and encode still happen every frame once the cold start is behind you
-— which gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a detect+track-only
-figure would suggest, and nothing like the 87 FPS the ONNX row implies. That
-distinction matters for short-clip batch processing versus a long-running
-stream.
+— which for this run gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a
+detect+track-only figure would suggest, and nothing like the 87 FPS the ONNX row
+implies. That distinction matters for short-clip batch processing versus a
+long-running stream.
+
+**One run is not a rate, and this one was the fastest.** Repeating the same
+protocol in five separate processes and applying the same derivation to each
+gives 40.14, 41.22, 43.75, 48.74 and 56.29 ms/frame — a median of **43.75 ms,
+22.9 FPS**, with a range of 17.8 to 24.9 FPS. The 38.72 ms above is not the
+middle of that spread; it is faster than all five, so quoting it as the headline
+was quoting the best run rather than the typical one. The first screen now
+carries the median and the range, and [the repeat
+summary](../reports/tracking_repeats/summary.json) records both, derived by
+`scripts/summarize_tracking.py` from the five committed reports rather than
+retyped.
+
+Summing per-stage medians is also what excludes the cold start: the first frame
+costs about 180x a normal one, which moves a mean over 90 frames and does not
+move a median.
 
 Association statistics — not association *quality*, which cannot be stated
 without ground-truth track ids this clip does not have: 306 unique tracks,
@@ -624,6 +639,12 @@ python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 # ONNX export + latency across backends (run on an idle GPU)
 python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 
+# The same, in FP16 -> reports/benchmark_fp16.json. Exports a separate graph,
+# validates it against the FP32 PyTorch baseline through the same accuracy
+# gate, and re-benchmarks the FP32 graph in the same process so the speedup is
+# a within-session ratio rather than a comparison across two runs.
+python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024 --half
+
 # Video inference + ByteTrack, with a staged latency profile.
 #
 # The plain form picks the densest val frame, which depends on which dataset
@@ -669,7 +690,7 @@ it was used.
 ```
 src/train.py            training at a chosen input resolution
 src/evaluate.py         per-class metrics; label-size distribution
-src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
+src/benchmark.py        ONNX export (FP32 or --half); latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 src/make_demo_gif.py    README GIF from track_out.mp4, with its digest

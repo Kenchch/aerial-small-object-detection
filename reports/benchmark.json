@@ -4,22 +4,22 @@
   "mAP50_95": 0.2216,
   "pytorch_cuda": {
     "core": {
-      "median_ms": 11.74,
-      "p95_ms": 14.98,
-      "min_ms": 10.69,
-      "fps": 85.2
+      "median_ms": 12.51,
+      "p95_ms": 19.15,
+      "min_ms": 11.29,
+      "fps": 80.0
     },
     "transfer_inclusive": {
-      "median_ms": 14.48,
-      "p95_ms": 17.21,
-      "min_ms": 13.58,
-      "fps": 69.1
+      "median_ms": 15.22,
+      "p95_ms": 26.19,
+      "min_ms": 14.18,
+      "fps": 65.7
     }
   },
   "onnx_size_mb": 10.37,
   "export": {
     "weights_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
-    "onnx_sha256": "684b5a349bdfa88d0d703a997a5dac1b5327acc1c6cdaa58d6df75d56b86c4f2",
+    "onnx_sha256": "61c65799c4e3105d5f38d062fa36284bb7368d1c679a45a595c300f4194c0a6b",
     "imgsz": 1024,
     "opset": 13,
     "simplify": true,
@@ -40,21 +40,21 @@
     "delta": {
       "mAP50": 0.0004,
       "mAP50_95": 0.0007,
-      "tolerance": 0.01
+      "tolerance": 0.002
     }
   },
   "onnx_cuda": {
     "core": {
-      "median_ms": 9.27,
-      "p95_ms": 9.82,
-      "min_ms": 9.08,
-      "fps": 107.9
+      "median_ms": 10.43,
+      "p95_ms": 11.29,
+      "min_ms": 9.09,
+      "fps": 95.8
     },
     "transfer_inclusive": {
-      "median_ms": 11.49,
-      "p95_ms": 12.78,
-      "min_ms": 11.03,
-      "fps": 87.0
+      "median_ms": 12.68,
+      "p95_ms": 13.71,
+      "min_ms": 11.45,
+      "fps": 78.8
     }
   },
   "onnx_cuda_placement": {
@@ -67,19 +67,22 @@
   },
   "onnx_cpu": {
     "core": {
-      "median_ms": 102.94,
-      "p95_ms": 132.59,
-      "min_ms": 87.42,
-      "fps": 9.7
+      "median_ms": 124.01,
+      "p95_ms": 138.52,
+      "min_ms": 114.49,
+      "fps": 8.1
     },
     "transfer_inclusive": {
-      "median_ms": 102.94,
-      "p95_ms": 132.59,
-      "min_ms": 87.42,
-      "fps": 9.7
+      "median_ms": 124.01,
+      "p95_ms": 138.52,
+      "min_ms": 114.49,
+      "fps": 8.1
     }
   },
   "environment": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpu_count": 12,
+    "ort_intra_op_num_threads": 0,
     "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
     "cuda": "12.4",
     "cudnn": 90100,
@@ -90,6 +93,7 @@
       "CUDAExecutionProvider",
       "CPUExecutionProvider"
     ],
+    "cudnn_from_torch": true,
     "imgsz": 1024,
     "batch_size": 1,
     "warmup_iters": 20,

@@ -39,7 +39,7 @@ COPY src/ ./src/
 COPY docker/VisDrone.yaml ./docker/VisDrone.yaml
 
 # Weights and data are MOUNTED, not baked in. A model inside the image cannot
-# be updated without a rebuild, and the checkpoint is 5.3 MB of build cache
+# be updated without a rebuild, and the checkpoint is 5.2 MiB of build cache
 # nobody asked for.
 VOLUME ["/weights", "/data", "/out"]
 

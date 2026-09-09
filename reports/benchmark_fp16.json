@@ -1,29 +1,124 @@
 {
-  "precision": "FP16",
-  "split": "val",
   "imgsz": 1024,
-  "checkpoint_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
-  "onnx_sha256": "793e4cf0337764b93d7b64e7d4d1b37c2a602774a353c697c99cdffe42333994",
-  "mAP50": 0.3741616073851857,
-  "mAP50_95": 0.2208982612808026,
-  "latency": {
-    "scope": "ORT session.run, host-to-device + forward + device-to-host; no preprocessing/NMS",
-    "input": "seed-0 random float16 tensor; batch=1",
-    "warmup": 10,
-    "iterations": 100,
-    "median_ms": 8.588200085796416,
-    "p95_ms": 17.161350161768496
+  "precision": "FP16",
+  "mAP50": 0.3748,
+  "mAP50_95": 0.2216,
+  "pytorch_cuda": {
+    "core": {
+      "median_ms": 13.15,
+      "p95_ms": 20.15,
+      "min_ms": 11.04,
+      "fps": 76.0
+    },
+    "transfer_inclusive": {
+      "median_ms": 21.93,
+      "p95_ms": 32.38,
+      "min_ms": 15.03,
+      "fps": 45.6
+    }
+  },
+  "onnx_size_mb": 5.24,
+  "export": {
+    "weights_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
+    "onnx_sha256": "7ca69db0714bf9ad796bc991ade2421349611a524ae2afac376547028969403b",
+    "imgsz": 1024,
+    "half": true,
+    "opset": 13,
+    "simplify": true,
+    "dynamic": false,
+    "ultralytics": "8.4.110",
+    "onnx": "1.22.0",
+    "onnxslim": "0.1.94"
+  },
+  "accuracy": {
+    "pytorch": {
+      "mAP50": 0.3748,
+      "mAP50_95": 0.2216
+    },
+    "onnx": {
+      "mAP50": 0.3743,
+      "mAP50_95": 0.2211
+    },
+    "delta": {
+      "mAP50": -0.0005,
+      "mAP50_95": -0.0005,
+      "tolerance": 0.002
+    }
+  },
+  "onnx_cuda": {
+    "core": {
+      "median_ms": 7.69,
+      "p95_ms": 10.69,
+      "min_ms": 6.99,
+      "fps": 130.0
+    },
+    "transfer_inclusive": {
+      "median_ms": 9.92,
+      "p95_ms": 19.78,
+      "min_ms": 9.34,
+      "fps": 100.8
+    }
+  },
+  "onnx_cuda_placement": {
+    "nodes_total": 240,
+    "by_provider": {
+      "CUDAExecutionProvider": 240
+    },
+    "cpu_fallback_nodes": 0,
+    "all_on_cuda": true
+  },
+  "onnx_cpu": {
+    "core": {
+      "median_ms": 160.45,
+      "p95_ms": 200.47,
+      "min_ms": 146.31,
+      "fps": 6.2
+    },
+    "transfer_inclusive": {
+      "median_ms": 160.45,
+      "p95_ms": 200.47,
+      "min_ms": 146.31,
+      "fps": 6.2
+    }
+  },
+  "fp32_reference": {
+    "onnx_cuda": {
+      "core": {
+        "median_ms": 9.24,
+        "p95_ms": 10.83,
+        "min_ms": 8.82,
+        "fps": 108.2
+      },
+      "transfer_inclusive": {
+        "median_ms": 11.2,
+        "p95_ms": 13.88,
+        "min_ms": 10.71,
+        "fps": 89.3
+      }
+    },
+    "onnx_size_mb": 10.37,
+    "note": "The FP32 graph, benchmarked in this same process so the speedup is a within-session ratio. Its accuracy is not re-validated here; reports/benchmark.json is the FP32 record.",
+    "core_speedup_pct": 16.8
   },
   "environment": {
-    "torch": "2.6.0+cu124",
-    "ultralytics": "8.4.110",
-    "onnxruntime": "1.20.2",
-    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
     "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpu_count": 12,
+    "ort_intra_op_num_threads": 0,
+    "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    "cuda": "12.4",
+    "cudnn": 90100,
+    "torch": "2.6.0+cu124",
+    "onnxruntime": "1.20.2",
     "providers": [
+      "TensorrtExecutionProvider",
       "CUDAExecutionProvider",
       "CPUExecutionProvider"
     ],
-    "intra_op_num_threads": 0
+    "cudnn_from_torch": true,
+    "imgsz": 1024,
+    "batch_size": 1,
+    "warmup_iters": 20,
+    "timed_iters": 100,
+    "statistic": "median and p95 over timed_iters, warmup discarded"
   }
 }

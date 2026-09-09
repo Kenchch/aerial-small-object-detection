@@ -107,9 +107,17 @@ def test_end_to_end_throughput_matches():
 
 
 def test_the_steady_state_figure_is_the_sum_of_the_stage_medians():
-    """Derived, not measured - so it is checked by recomputing it."""
+    """Derived, not measured - so it is checked by recomputing it.
+
+    "for this run" is load-bearing in the pattern below. The sentence used to
+    read "which gives", and the figure it introduces turned out to be faster
+    than all five repeats of the same protocol; the qualifier is what stops it
+    reading as the rate rather than as one run's rate. Matching it here means
+    dropping the qualifier fails this test rather than quietly restoring the
+    old claim.
+    """
     stated_ms, stated_fps = _one(
-        r"which gives \*\*([\d.]+) ms/frame → ([\d.]+) FPS\*\*"
+        r"which for this run gives \*\*([\d.]+) ms/frame → ([\d.]+) FPS\*\*"
     )
     steady = sum(v for v in TRACKING["stage_ms_median"].values() if v)
     assert float(stated_ms) == pytest.approx(steady, abs=0.01)
