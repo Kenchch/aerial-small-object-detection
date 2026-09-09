@@ -639,6 +639,12 @@ python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 # ONNX export + latency across backends (run on an idle GPU)
 python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 
+# The same, in FP16 -> reports/benchmark_fp16.json. Exports a separate graph,
+# validates it against the FP32 PyTorch baseline through the same accuracy
+# gate, and re-benchmarks the FP32 graph in the same process so the speedup is
+# a within-session ratio rather than a comparison across two runs.
+python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024 --half
+
 # Video inference + ByteTrack, with a staged latency profile.
 #
 # The plain form picks the densest val frame, which depends on which dataset
@@ -684,7 +690,7 @@ it was used.
 ```
 src/train.py            training at a chosen input resolution
 src/evaluate.py         per-class metrics; label-size distribution
-src/benchmark.py        ONNX export; latency on PyTorch / ONNX Runtime GPU / CPU
+src/benchmark.py        ONNX export (FP32 or --half); latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 src/make_demo_gif.py    README GIF from track_out.mp4, with its digest

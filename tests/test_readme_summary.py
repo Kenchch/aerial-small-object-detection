@@ -13,8 +13,6 @@ regenerated, and only comparing the formatted text catches it.
 import json
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -115,22 +113,86 @@ def test_test_dev_gap_against_validation_is_stated_correctly():
 # --------------------------------------------------------------------------- #
 
 
-def test_fp16_map_matches_its_report():
+def test_fp16_accuracy_matches_its_report():
+    """Both sides of the comparison, because the FP16 figure means nothing on
+    its own -- the claim is what half precision cost, not what it scored."""
     f = _report("benchmark_fp16.json")
-    value = f.get("mAP50_95") or f.get("accuracy", {}).get("mAP50_95")
-    if value is None:
-        pytest.skip("benchmark_fp16.json does not record mAP50_95")
-    assert f"**{value:.4f}**" in _readme()
-
-
-def test_fp16_latency_matches_its_report():
-    """The FP16 latency is transfer-inclusive and so is not comparable with the
-    core figure on the first screen. Both are quoted; both have to be current."""
-    lat = _report("benchmark_fp16.json")["latency"]
+    assert f["precision"] == "FP16"
     readme = _readme()
-    assert f"**{lat['median_ms']:.2f} ms" in readme
-    assert f"{lat['p95_ms']:.2f} ms p95**" in readme
-    assert f"{lat['warmup']} warm-ups, {lat['iterations']} timed iterations" in readme
+    assert f"mAP50-95 **{f['accuracy']['onnx']['mAP50_95']:.4f}**" in readme
+    assert f"baseline's {f['accuracy']['pytorch']['mAP50_95']:.4f}" in readme
+    assert f"**{f['accuracy']['delta']['mAP50_95']:+.4f}**" in readme
+
+
+def test_fp16_passed_the_same_accuracy_gate_as_the_fp32_export():
+    """The README says "inside the same 0.002 gate". That is only true while
+    the two reports carry the same tolerance and the delta is under it."""
+    from benchmark import MAP_TOLERANCE  # src/ is on sys.path via conftest
+
+    f = _report("benchmark_fp16.json")["accuracy"]["delta"]
+    assert (
+        f["tolerance"]
+        == MAP_TOLERANCE
+        == _report("benchmark.json")["accuracy"]["delta"]["tolerance"]
+    )
+    assert max(abs(f["mAP50"]), abs(f["mAP50_95"])) <= f["tolerance"]
+    assert f"same {f['tolerance']} gate" in _readme()
+
+
+def test_fp16_speedup_is_measured_within_one_session():
+    """The ratio has to come from one process.
+
+    This repository measured an 11% spread between sessions on this machine,
+    and the FP16 speedup is 16.8% -- so a cross-session comparison is the same
+    size as the effect. Taking the committed FP32 figure instead of the
+    same-session one turns 16.8% into 26%, which is why `--half` re-benchmarks
+    the FP32 graph rather than reading benchmark.json.
+    """
+    report = _report("benchmark_fp16.json")
+    reference = report["fp32_reference"]
+    readme = _readme()
+
+    core16 = report["onnx_cuda"]["core"]["median_ms"]
+    core32 = reference["onnx_cuda"]["core"]["median_ms"]
+    stated = reference["core_speedup_pct"]
+
+    assert f"**{core16:.2f} ms**" in readme
+    assert f"against **{core32:.2f} ms**" in readme
+    assert f"**{stated}% faster**" in readme
+    assert (
+        f"it was {report['onnx_cuda']['transfer_inclusive']['median_ms']:.2f} ms"
+        in readme
+    )
+
+    # The percentage is the two milliseconds, not a third number typed beside
+    # them.
+    assert stated == round(100 * (1 - core16 / core32), 1)
+
+
+def test_the_cross_session_figure_is_named_as_the_wrong_one():
+    """The README quotes what the comparison WOULD have read against the
+    committed FP32 report, to show the size of the trap. That figure has to
+    stay correct too, or the warning becomes its own stale number."""
+    report = _report("benchmark_fp16.json")
+    other_session = _report("benchmark.json")["onnx_cuda"]["core"]["median_ms"]
+    core16 = report["onnx_cuda"]["core"]["median_ms"]
+    readme = _readme()
+
+    assert f"the {other_session:.2f} ms in the" in readme
+    assert f"would read {100 * (1 - core16 / other_session):.0f}%" in readme
+
+
+def test_fp16_graph_size_and_placement_match_their_reports():
+    # Both sizes from the FP16 run's own report: it records the FP32 graph it
+    # benchmarked against, so the pair cannot come from two different exports.
+    fp16 = _report("benchmark_fp16.json")
+    fp32 = fp16["fp32_reference"]
+    placement = fp16["onnx_cuda_placement"]
+    total = placement["nodes_total"]
+    readme = _readme()
+    assert placement["cpu_fallback_nodes"] == 0, "the report says nodes fell back"
+    assert f"**{total}/{total} nodes ran on CUDA**" in readme
+    assert f"{fp16['onnx_size_mb']:.2f} MB against {fp32['onnx_size_mb']:.2f}" in readme
 
 
 def test_tracking_repeats_match_their_summary():
