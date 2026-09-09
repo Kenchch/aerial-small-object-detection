@@ -78,11 +78,21 @@ labelled test-dev evaluation at 1024 px gave mAP50 **0.3183** / mAP50-95
 **0.1831** across 1,610 images — [evidence](reports/evaluation_test.json).
 Reproduce with `src/evaluate.py --split test`.
 
-**FP16.** [FP16 ONNX validation](reports/benchmark_fp16.json) reached mAP50-95
-**0.2209** on val. Its transfer-inclusive `session.run` latency was **8.59 ms
-median / 17.16 ms p95** (batch 1, 10 warm-ups, 100 timed iterations;
-preprocessing and NMS excluded). Reproduce with `python
-scripts/benchmark_fp16.py --weights <best.pt> --data <dataset.yaml>`.
+**FP16.** [FP16 ONNX](reports/benchmark_fp16.json) reached mAP50-95 **0.2211**
+on val against the FP32 PyTorch baseline's 0.2216 — a delta of **-0.0005**,
+inside the same 0.002 gate the FP32 export has to pass.
+The graph is 5.24 MB against 10.37, and **240/240 nodes ran on CUDA**.
+
+Core latency was **7.69 ms** against **9.24 ms** for the FP32 graph:
+**16.8% faster**. Both figures come from the same process, which is the only
+way this ratio means anything — the FP32 graph is re-benchmarked during a
+`--half` run for exactly that reason. Measured against the 10.43 ms in the
+table above, from a different session, the same FP16 result would read 26%
+faster; the difference between 16.8 and 26 is between-session variance, not
+precision. Transfer-inclusive it was 9.92 ms.
+
+Reproduce with `python src/benchmark.py --weights <best.pt> --data
+<dataset.yaml> --half`.
 
 **Tracking repeats.** [Five repeats](reports/tracking_repeats/summary.json),
 each decoding and encoding the same 90-frame synthetic pan, gave

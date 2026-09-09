@@ -205,6 +205,32 @@ def bench_pytorch(weights: Path, imgsz: int, device: str = "cuda") -> dict:
     return {"core": run(core), "transfer_inclusive": run(transfer_inclusive)}
 
 
+# ORT reports an input's type as a string. Mapping it back is what lets the
+# same code feed an FP32 and an FP16 graph: hardcoding float32 worked only for
+# as long as there was one precision, and it fails loudly rather than quietly
+# -- ORT rejects the mismatch -- which is the reason this is a lookup and not a
+# cast.
+_ORT_DTYPES = {
+    "tensor(float)": "float32",
+    "tensor(float16)": "float16",
+    "tensor(double)": "float64",
+}
+
+
+def _dummy_input(sess, imgsz: int):
+    """A random NCHW batch of 1, in whatever dtype this graph declares."""
+    import numpy as np
+
+    spec = sess.get_inputs()[0]
+    dtype = _ORT_DTYPES.get(spec.type)
+    if dtype is None:
+        raise RuntimeError(
+            f"{spec.name} has type {spec.type}, which this benchmark does not "
+            f"know how to synthesise an input for"
+        )
+    return spec.name, np.random.randn(1, 3, imgsz, imgsz).astype(dtype)
+
+
 def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     """Latency under ONNX Runtime for one execution provider.
 
@@ -215,7 +241,6 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     reports honest numbers under a dishonest label, which is worse than an
     outright error. So verify what actually got bound and record it.
     """
-    import numpy as np
 
     _register_cudnn()
     import onnxruntime as ort
@@ -228,8 +253,7 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
             f"refusing to report a CPU measurement as GPU"
         )
 
-    name = sess.get_inputs()[0].name
-    dummy = np.random.randn(1, 3, imgsz, imgsz).astype(np.float32)
+    name, dummy = _dummy_input(sess, imgsz)
 
     def run(fn) -> dict:
         for _ in range(WARMUP_ITERS):
@@ -250,7 +274,7 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     # counterpart to PyTorch's GPU-resident measurement.
     binding = sess.io_binding()
     gpu_in = ort.OrtValue.ortvalue_from_numpy(dummy, "cuda", 0)
-    binding.bind_input(name, "cuda", 0, np.float32, gpu_in.shape(), gpu_in.data_ptr())
+    binding.bind_input(name, "cuda", 0, dummy.dtype, gpu_in.shape(), gpu_in.data_ptr())
     for out in sess.get_outputs():
         binding.bind_output(out.name, "cuda", 0)
     core = run(lambda: sess.run_with_iobinding(binding))
@@ -274,7 +298,6 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     import collections
     import json as _json
 
-    import numpy as np
     import onnxruntime as ort
 
     opts = ort.SessionOptions()
@@ -283,14 +306,8 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     sess = ort.InferenceSession(
         str(onnx_path), opts, providers=["CUDAExecutionProvider"]
     )
-    sess.run(
-        None,
-        {
-            sess.get_inputs()[0].name: np.random.randn(1, 3, imgsz, imgsz).astype(
-                np.float32
-            )
-        },
-    )
+    name, dummy = _dummy_input(sess, imgsz)
+    sess.run(None, {name: dummy})
     trace = Path(sess.end_profiling())
     try:
         events = _json.loads(trace.read_text(encoding="utf-8"))
@@ -385,7 +402,9 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def export_onnx(weights: Path, onnx_path: Path, imgsz: int, exporter=None) -> None:
+def export_onnx(
+    weights: Path, onnx_path: Path, imgsz: int, exporter=None, half: bool = False
+) -> None:
     """Export `weights` to `onnx_path`, writing nothing into the weights dir.
 
     Ultralytics writes the .onnx next to the .pt it loaded - verified: exporting
@@ -426,6 +445,7 @@ def export_onnx(weights: Path, onnx_path: Path, imgsz: int, exporter=None) -> No
                     opset=ONNX_OPSET,
                     simplify=ONNX_SIMPLIFY,
                     dynamic=ONNX_DYNAMIC,
+                    half=half,
                 )
 
         produced = Path(exporter(staged_weights))
@@ -447,7 +467,9 @@ def _MANIFEST_STAMP(onnx_path: Path) -> Path:
     return onnx_path.with_suffix(".onnx.manifest.json")
 
 
-def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
+def _export_manifest(
+    onnx_path: Path, weights: Path, imgsz: int, half: bool = False
+) -> dict:
     """Everything that determines whether a cached .onnx is the right one.
 
     A weights digest alone was not enough. It catches a changed checkpoint, but
@@ -473,6 +495,11 @@ def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
         "weights_sha256": _sha256(weights),
         "onnx_sha256": _sha256(onnx_path) if onnx_path.exists() else None,
         "imgsz": imgsz,
+        # In the key, not merely recorded: an FP16 and an FP32 export of the
+        # same checkpoint at the same size are different graphs, and without
+        # this the second run would hit the first one's cache and benchmark
+        # the wrong precision under the right label.
+        "half": half,
         "opset": ONNX_OPSET,
         "simplify": ONNX_SIMPLIFY,
         "dynamic": ONNX_DYNAMIC,
@@ -482,7 +509,9 @@ def _export_manifest(onnx_path: Path, weights: Path, imgsz: int) -> dict:
     }
 
 
-def _export_is_current(onnx_path: Path, weights: Path, imgsz: int) -> bool:
+def _export_is_current(
+    onnx_path: Path, weights: Path, imgsz: int, half: bool = False
+) -> bool:
     """Does this .onnx correspond to these weights, at this size, from this
     toolchain?
 
@@ -498,7 +527,7 @@ def _export_is_current(onnx_path: Path, weights: Path, imgsz: int) -> bool:
         recorded = json.loads(stamp.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return False
-    return recorded == _export_manifest(onnx_path, weights, imgsz)
+    return recorded == _export_manifest(onnx_path, weights, imgsz, half)
 
 
 def run_one(
@@ -509,8 +538,16 @@ def run_one(
     map_tolerance: float = MAP_TOLERANCE,
     cache_dir: Path | None = None,
     allow_cpu_fallback: bool = False,
+    half: bool = False,
 ) -> dict:
-    """Accuracy + latency across every available backend."""
+    """Accuracy + latency across every available backend.
+
+    `half` exports and measures the ONNX side in FP16. The PyTorch row stays
+    FP32 deliberately: it is the baseline the accuracy gate compares against,
+    and an FP16-vs-FP16 comparison would answer a different question -- "did
+    the export preserve the half-precision model" rather than "what did half
+    precision cost".
+    """
     map_tolerance = _map_tolerance(map_tolerance)
 
     import torch
@@ -524,6 +561,7 @@ def run_one(
     pytorch_map95 = _validated_map("PyTorch mAP50-95", metrics.box.map)
     row = {
         "imgsz": imgsz,
+        "precision": "FP16" if half else "FP32",
         "mAP50": round(pytorch_map50, 4),
         "mAP50_95": round(pytorch_map95, 4),
     }
@@ -548,29 +586,34 @@ def run_one(
     # artefacts, and writing them beside the checkpoint means the weights mount
     # has to be writable. Defaults to the weights directory so a local run is
     # unchanged.
-    onnx_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}.onnx"
-    if not _export_is_current(onnx_path, weights, imgsz):
-        export_onnx(weights, onnx_path, imgsz)
+    # The precision is in the filename as well as in the manifest. The manifest
+    # would catch a mismatch on its own, by forcing a re-export -- but into the
+    # same path, so the two precisions would take turns overwriting each other
+    # and every run would export.
+    suffix = "_fp16" if half else ""
+    onnx_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}{suffix}.onnx"
+    if not _export_is_current(onnx_path, weights, imgsz, half):
+        export_onnx(weights, onnx_path, imgsz, half=half)
         # Write the SAME stamp _export_is_current() reads. It wrote
         # .onnx.sha256 while the check looked for .onnx.manifest.json, so the
         # check never found a stamp, always returned False, and every run
         # re-exported - the cache existed but could not be hit.
         _MANIFEST_STAMP(onnx_path).write_text(
-            json.dumps(_export_manifest(onnx_path, weights, imgsz), indent=2),
+            json.dumps(_export_manifest(onnx_path, weights, imgsz, half), indent=2),
             encoding="utf-8",
         )
         # A stamp left by the previous scheme would otherwise sit there forever.
         onnx_path.with_suffix(".onnx.sha256").unlink(missing_ok=True)
 
     row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024**2, 2)
-    row["export"] = _export_manifest(onnx_path, weights, imgsz)
+    row["export"] = _export_manifest(onnx_path, weights, imgsz, half)
 
     # Validate the ONNX graph itself. Reporting the PyTorch mAP beside ONNX
     # latency invites the reader to assume the export preserved accuracy, which
     # is an assumption and not a measurement -- opset choice, constant folding
     # and fp precision can all move it.
     onnx_metrics = YOLO(str(onnx_path), task="detect").val(
-        data=data, imgsz=imgsz, device=device, verbose=False
+        data=data, imgsz=imgsz, device=device, half=half, verbose=False
     )
     onnx_map50 = _validated_map("ONNX mAP50", onnx_metrics.box.map50)
     onnx_map95 = _validated_map("ONNX mAP50-95", onnx_metrics.box.map)
@@ -617,6 +660,44 @@ def run_one(
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
     print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
+    # The FP16 number is only useful as a ratio, and this repository's own
+    # README says latency is reproducible within a session and not across them
+    # -- it measured an 11% spread between sessions on this machine. Comparing
+    # a fresh FP16 figure against a committed FP32 one would therefore be
+    # reporting session noise as a speedup, which is the exact mistake that
+    # paragraph exists to warn about.
+    #
+    # So the FP32 graph is measured again here, in this process, immediately
+    # after. Both numbers then come from one session and the ratio between them
+    # means something. The export is cached, so this costs a benchmark loop and
+    # not a re-export.
+    if half and "CUDAExecutionProvider" in available:
+        fp32_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}.onnx"
+        if not _export_is_current(fp32_path, weights, imgsz, half=False):
+            export_onnx(weights, fp32_path, imgsz, half=False)
+            _MANIFEST_STAMP(fp32_path).write_text(
+                json.dumps(
+                    _export_manifest(fp32_path, weights, imgsz, half=False), indent=2
+                ),
+                encoding="utf-8",
+            )
+        reference = bench_onnx(fp32_path, imgsz, "CUDAExecutionProvider")
+        row["fp32_reference"] = {
+            "onnx_cuda": reference,
+            "onnx_size_mb": round(fp32_path.stat().st_size / 1024**2, 2),
+            "note": (
+                "The FP32 graph, benchmarked in this same process so the "
+                "speedup is a within-session ratio. Its accuracy is not "
+                "re-validated here; reports/benchmark.json is the FP32 record."
+            ),
+        }
+        speedup = (
+            1 - row["onnx_cuda"]["core"]["median_ms"] / reference["core"]["median_ms"]
+        )
+        row["fp32_reference"]["core_speedup_pct"] = round(100 * speedup, 1)
+        print(f"  FP32 reference (same session): {reference['core']}")
+        print(f"  FP16 core speedup: {100 * speedup:.1f}%")
+
     row["environment"] = _environment(imgsz)
     return row
 
@@ -660,8 +741,28 @@ def main() -> None:
         "measured under a CUDA label is a wrong number, not a "
         "slow one.",
     )
-    p.add_argument("--out", type=Path, default=REPORTS_DIR / "benchmark.json")
+    p.add_argument(
+        "--half",
+        action="store_true",
+        help="Export and measure the ONNX side in FP16. The PyTorch row "
+        "stays FP32: it is the baseline the accuracy gate compares "
+        "against, so the delta reports what half precision cost rather "
+        "than whether an FP16 export matches an FP16 model.",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Defaults to reports/benchmark.json, or "
+        "reports/benchmark_fp16.json with --half, so a half-precision run "
+        "cannot silently replace the full-precision report.",
+    )
     args = p.parse_args()
+
+    if args.out is None:
+        args.out = REPORTS_DIR / (
+            "benchmark_fp16.json" if args.half else "benchmark.json"
+        )
 
     row = run_one(
         args.weights,
@@ -671,6 +772,7 @@ def main() -> None:
         args.map_tolerance,
         args.cache_dir,
         args.allow_cpu_fallback,
+        args.half,
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -684,7 +786,10 @@ def main() -> None:
         return "n/a" if v is None else f"{v:.2f} ms"
 
     print(f"\n{'=' * 60}")
-    print(f"imgsz {row['imgsz']}   mAP50 {row['mAP50']}   mAP50-95 {row['mAP50_95']}")
+    print(
+        f"imgsz {row['imgsz']}   {row['precision']} ONNX   "
+        f"mAP50 {row['mAP50']}   mAP50-95 {row['mAP50_95']}  (PyTorch FP32)"
+    )
     print(f"{'':16}{'core':>12}{'+transfer':>12}")
     for label, key in (
         ("PyTorch CUDA", "pytorch_cuda"),
