@@ -2,17 +2,19 @@
 
 [![CI](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/Kenchch/aerial-small-object-detection/actions/workflows/ci.yml)
 
-YOLO11n detection on VisDrone2019, with ONNX deployment and a tracking pipeline
-for studying accuracy, GPU placement and inference latency on a laptop GPU.
+How accurately, and how fast, a small model finds people and vehicles in drone
+footage, where most objects are only a few pixels across. YOLO11n on
+VisDrone2019, with ONNX deployment and a tracking pipeline for studying
+accuracy, GPU placement and inference latency on a laptop GPU.
 
 ## Results at a glance
 
 | Evidence | Result |
 |---|---|
 | Training | YOLO11n, 1024 px, 50 epochs, RTX 2070 Max-Q |
-| Standalone validation | mAP50 0.375 / mAP50-95 0.222 |
-| Held-out test-dev | mAP50 0.318 / mAP50-95 0.183 on 1,610 images, only ever evaluated with the fixed v1.0 checkpoint |
-| ONNX CUDA core latency | 10.0 ms; 22% faster than eager in this run, 7-26% across 4 sessions (median 23%) |
+| Validation (the checkpoint was chosen on it) | mAP50 0.375 / mAP50-95 0.222 |
+| Held-out test-dev | mAP50 0.318 / mAP50-95 0.183 on 1,610 images, only ever evaluated with the fixed v1.0 checkpoint; the gap to validation is the honest number |
+| ONNX CUDA core latency | 10.0 ms against 12.8 ms eager PyTorch: 22% faster in this run, 7-26% across 4 sessions (median 23%) |
 | CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0000 against PyTorch at the same letterbox |
 | ONNX CPU | Approximately 10× slower than ONNX CUDA, both host-in/host-out, in this benchmark |
 | Object scale / tracking | 92.4% of validation boxes small at 640 px; 25.8 FPS steady-state, median of five repeats (25.0-27.0) |
@@ -38,7 +40,8 @@ slightly from standalone fp32 evaluation of the same checkpoint.
 - Detection evaluation and per-class accuracy reports.
 - ONNX export, accuracy parity checks and CUDA node-placement verification.
 - Separate core and transfer-inclusive latency measurements.
-- A profiled tracking demo with video digests and source provenance.
+- A throughput profile of the tracking pipeline, run over a synthetic pan of
+  one real image: it measures speed, not tracking accuracy.
 
 ## Run it
 
@@ -117,8 +120,13 @@ edge-device performance. Rebuild with `python scripts/summarize_tracking.py`.
 
 ## How this was built
 
-I set the problem, the data contracts and the quality rules, ran the benchmarks
-and reviewed every diff; Claude Code and OpenAI Codex drafted code, refactored
-and scaffolded tests.
+I used Claude Code and OpenAI Codex as drafting tools. The problem, the data
+contracts and the quality rules are mine, and so are the benchmark runs and the
+review: every generated change was read and run before it was committed. The
+tools drafted code, refactored and scaffolded tests.
+
+Commits made before 6 September 2026 carried `Co-Authored-By` trailers naming
+these tools. They were removed when I rewrote that history; most commits since
+then carry them, and each pull request states its own AI involvement.
 
 Runtime upgrade decisions are recorded in [dependency review](docs/DEPENDENCIES.md).

@@ -40,6 +40,13 @@ def test_onnx_cuda_latency_matches_benchmark():
     assert f"{core:.1f} ms" in _readme()
 
 
+def test_eager_latency_matches_benchmark():
+    """The baseline the speed-up is measured against, stated beside it."""
+    b = _report("benchmark.json")
+    eager = b["pytorch_cuda"]["core"]["median_ms"]
+    assert f"against {eager:.1f} ms eager PyTorch" in _readme()
+
+
 def test_onnx_speedup_matches_benchmark():
     b = _report("benchmark.json")
     core = b["onnx_cuda"]["core"]["median_ms"]
