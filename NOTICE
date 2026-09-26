@@ -5,8 +5,9 @@ Ultralytics
 -----------
 This project depends on Ultralytics and fine-tunes the Ultralytics yolo11n.pt
 weights. Ultralytics is licensed under GNU AGPL-3.0 unless a separate enterprise
-licence applies. The published best.pt model and its ONNX export are therefore
-offered under AGPL-3.0, not under this repository's MIT licence.
+licence applies. The published best.pt model, and any ONNX export of it (none
+is distributed here), are therefore offered under AGPL-3.0, not under this
+repository's MIT licence. The licence text is in LICENSES/AGPL-3.0.txt.
 
 Project and licence information: https://github.com/ultralytics/ultralytics
 

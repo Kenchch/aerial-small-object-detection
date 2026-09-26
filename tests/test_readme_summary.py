@@ -48,9 +48,28 @@ def test_onnx_speedup_matches_benchmark():
 
 
 def test_cpu_slowdown_matches_benchmark():
+    """Host-in/host-out on both sides. The CPU row has no separate core figure -
+    bench_onnx reports its transfer-inclusive time under both keys - so dividing
+    it by the CUDA *core* time mixed regimes and read 12x for what is 10x."""
     b = _report("benchmark.json")
-    ratio = b["onnx_cpu"]["core"]["median_ms"] / b["onnx_cuda"]["core"]["median_ms"]
-    assert f"{ratio:.0f}× slower" in _readme()
+    ratio = (
+        b["onnx_cpu"]["transfer_inclusive"]["median_ms"]
+        / b["onnx_cuda"]["transfer_inclusive"]["median_ms"]
+    )
+    assert (
+        f"Approximately {ratio:.0f}× slower than ONNX CUDA, both host-in/host-out"
+        in (_readme())
+    )
+
+
+def test_the_other_sessions_speedup_is_the_one_its_report_gives():
+    """The headline 17% is one session; the --half run measured the same pair
+    in one process and got a different ratio, which the README now says."""
+    fp16 = _report("benchmark_fp16.json")
+    eager = fp16["pytorch_cuda"]["core"]["median_ms"]
+    fp32 = fp16["fp32_reference"]["onnx_cuda"]["core"]["median_ms"]
+    readme = " ".join(_readme().split())
+    assert f"{100 * (1 - fp32 / eager):.0f}% where this run got" in readme
 
 
 def test_node_placement_matches_benchmark():
@@ -192,7 +211,10 @@ def test_fp16_graph_size_and_placement_match_their_reports():
     readme = _readme()
     assert placement["cpu_fallback_nodes"] == 0, "the report says nodes fell back"
     assert f"**{total}/{total} nodes ran on CUDA**" in readme
-    assert f"{fp16['onnx_size_mb']:.2f} MB against {fp32['onnx_size_mb']:.2f}" in readme
+    # onnx_size_mb is bytes / 1024**2, so the unit the README states is MiB.
+    assert (
+        f"{fp16['onnx_size_mb']:.2f} MiB against {fp32['onnx_size_mb']:.2f}" in readme
+    )
 
 
 def test_tracking_repeats_match_their_summary():
@@ -201,8 +223,18 @@ def test_tracking_repeats_match_their_summary():
     )
     fps = s["statistics"]["end_to_end_fps"]
     readme = _readme()
-    assert f"**{fps['median']:.1f} FPS median**" in readme
+    assert f"**{fps['median']:.1f} FPS median** end-to-end" in readme
     assert f"{fps['min']:.1f}-{fps['max']:.1f} FPS" in readme
+
+    # The warm-up is why end-to-end sits so far below steady state; its range
+    # comes from the per-run reports the summary was built from.
+    first = [
+        json.loads(f.read_text(encoding="utf-8"))["warmup"]["first_frame_ms"] / 1000
+        for f in sorted((ROOT / "reports/tracking_repeats").glob("run_*.json"))
+    ]
+    assert f"including a {min(first):.1f}-{max(first):.1f} s first-frame warm-up" in (
+        " ".join(readme.split())
+    )
 
     steady = s["statistics"]["steady_state_fps"]
     assert f"{steady['median']:.1f} FPS steady-state" in readme

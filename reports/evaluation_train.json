@@ -3,6 +3,7 @@
   "label_scale": {
     "split": "train",
     "boxes": 343205,
+    "boxes_with_source_dims": 343205,
     "images": 6471,
     "share_pct_coco_at_640": {
       "small_lt_32x32px": 90.5,
@@ -41,9 +42,17 @@
     }
   },
   "config": {
-    "weights": "runs/n_1024/weights/best.pt",
-    "data": "VisDrone.yaml",
+    "weights": null,
+    "data": "docker/VisDrone.yaml",
     "imgsz": 1024,
     "split": "train"
+  },
+  "provenance": {
+    "run_date": "2026-09-26",
+    "split": "VisDrone2019-DET train",
+    "data": "docker/VisDrone.yaml",
+    "imgsz": 1024,
+    "ultralytics": "8.4.110",
+    "data_root_overridden": true
   }
 }

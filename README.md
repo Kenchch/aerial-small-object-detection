@@ -11,16 +11,18 @@ for studying accuracy, GPU placement and inference latency on a laptop GPU.
 |---|---|
 | Training | YOLO11n, 1024 px, 50 epochs, RTX 2070 Max-Q |
 | Standalone validation | mAP50 0.375 / mAP50-95 0.222 |
-| Held-out test-dev | mAP50 0.318 / mAP50-95 0.183 on 1,610 images, scored once after selection |
-| ONNX CUDA core latency | 10.4 ms; 17% faster than eager |
+| Held-out test-dev | mAP50 0.318 / mAP50-95 0.183 on 1,610 images, only ever evaluated with the fixed v1.0 checkpoint |
+| ONNX CUDA core latency | 10.4 ms; 17% faster than eager in the FP32 run (one session; the ratio moves between sessions) |
 | CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0007 |
-| ONNX CPU | Approximately 12× slower than ONNX CUDA in this benchmark |
+| ONNX CPU | Approximately 10× slower than ONNX CUDA, both host-in/host-out, in this benchmark |
 | Object scale / tracking | 92.4% of validation boxes small at 640 px; 22.9 FPS steady-state, median of five repeats (17.8-24.9) |
 
 Latency is reproducible within a session and not across them. Three
 consecutive runs of `src/benchmark.py` on the same machine and checkpoint gave
 ONNX CUDA core medians of 10.35, 10.37 and 10.43 ms — a spread under 1% — while
-an earlier session on the same GPU recorded 9.3 ms. The 100 timed iterations
+an earlier session on the same GPU recorded 9.3 ms. Ratios move too: the
+`--half` run re-measured PyTorch and the FP32 graph in one process and got
+30% where this run got 17%. The 100 timed iterations
 behind each median control the noise inside a run; they say nothing about
 driver version, thermal state or what else the machine was doing. Read these as
 one machine's numbers on one day, not as a device specification.
@@ -66,7 +68,7 @@ Tests use stubs and committed reports; they do not establish GPU performance.
 
 ## Limits
 
-- The checkpoint was selected on validation, so the val figures are optimistic by construction. The test-dev row above is the held-out number: it was scored once, after selection, and is 0.0385 mAP50-95 below val.
+- The checkpoint was selected on validation, so the val figures are optimistic by construction. The test-dev row above is the held-out number: it was never used for model or threshold selection (re-runs used the same fixed checkpoint), and is 0.0385 mAP50-95 below val.
 - There is no matched 640 px training ablation yet.
 - Benchmark results depend on hardware, precision and transfer boundaries.
 - The demo pans over one real image; it does not measure tracking accuracy on moving objects.
@@ -80,12 +82,13 @@ Tests use stubs and committed reports; they do not establish GPU performance.
 **Test-dev.** The v1.0 checkpoint was selected on validation. A separate
 labelled test-dev evaluation at 1024 px gave mAP50 **0.3183** / mAP50-95
 **0.1831** across 1,610 images — [evidence](reports/evaluation_test.json).
-Reproduce with `src/evaluate.py --split test`.
+Reproduce with `python src/evaluate.py --weights runs/n_1024/weights/best.pt
+--data docker/VisDrone.yaml --data-root "$DATASETS/VisDrone" --split test`.
 
 **FP16.** [FP16 ONNX](reports/benchmark_fp16.json) reached mAP50-95 **0.2211**
 on val against the FP32 PyTorch baseline's 0.2216 — a delta of **-0.0005**,
 inside the same 0.002 gate the FP32 export has to pass.
-The graph is 5.24 MB against 10.37, and **240/240 nodes ran on CUDA**.
+The graph is 5.24 MiB against 10.37, and **240/240 nodes ran on CUDA**.
 
 Core latency was **7.69 ms** against **9.24 ms** for the FP32 graph:
 **16.8% faster**. Both figures come from the same process, which is the only
@@ -100,7 +103,10 @@ Reproduce with `python src/benchmark.py --weights <best.pt> --data
 
 **Tracking repeats.** [Five repeats](reports/tracking_repeats/summary.json),
 each decoding and encoding the same 90-frame synthetic pan, gave
-**8.4 FPS median**, range **7.2-8.9 FPS**. Machine-specific, not general
+**8.4 FPS median** end-to-end, range **7.2-8.9 FPS**: wall time over all 90
+frames, including a 6.1-7.3 s first-frame warm-up. The 22.9 FPS steady-state
+figure above comes from the same runs with the warm-up excluded (sum of stage
+medians). Machine-specific, not general
 edge-device performance. Rebuild with `python scripts/summarize_tracking.py`.
 
 **GPU smoke test.** Opt-in: `RUN_GPU=1 AERIAL_TEST_IMAGE=<local image> pytest

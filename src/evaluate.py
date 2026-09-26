@@ -52,6 +52,8 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 # tail steals ground-truth boxes out of "missed" and into "misclassified",
 # which is exactly the comparison this report publishes.
 CONFUSION_CONF = 0.25
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 CONFUSION_IOU = 0.45  # ConfusionMatrix.process_batch's own default
 
 
@@ -227,44 +229,44 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     this reads each label's actual source image to get its real (W, H) and
     applies the correct per-image letterbox scale, rather than assuming one
     aspect ratio for the whole split.
+
+    The dataset is resolved by Ultralytics' own check_det_dataset, the function
+    .val() uses. This used to rebuild the paths itself as
+    datasets_dir / spec["path"], which disagrees with Ultralytics whenever
+    `path:` is relative to the working directory: .val() found the data, this
+    looked somewhere else, found nothing, and the report went out with an
+    empty label_scale and exit 0.
     """
     import numpy as np
-    import yaml
     from PIL import Image
-    from ultralytics.utils import SETTINGS
+    from ultralytics.data.utils import check_det_dataset, img2label_paths
 
-    data_yaml = (
-        Path(SETTINGS["datasets_dir"]) / data if not Path(data).exists() else Path(data)
-    )
-    # Ultralytics resolves the yaml itself; locate it via its own config dir.
-    if not data_yaml.exists():
-        from ultralytics.utils import ROOT
-
-        data_yaml = ROOT / "cfg" / "datasets" / data
-    # encoding must be explicit: Python on Windows defaults to cp1252, which
-    # chokes on the non-ASCII bytes in Ultralytics' bundled dataset yamls.
-    cfg = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
-
-    root = Path(SETTINGS["datasets_dir"]) / cfg["path"]
-    label_dir = root / cfg[split].replace("images", "labels")
-    image_dir = root / cfg[split]
-    files = list(label_dir.glob("*.txt"))
+    dataset = check_det_dataset(data, split=split)
+    if not isinstance(dataset.get(split), str):
+        raise SystemExit(
+            f"label-scale analysis needs one image directory for {split!r}; "
+            f"the spec gives {dataset.get(split)!r}"
+        )
+    image_dir = Path(dataset[split])
+    label_dir = Path(img2label_paths([str(image_dir / "x.jpg")])[0]).parent
+    names = dataset["names"]  # normalised to {index: name} by check_det_dataset
+    files = sorted(label_dir.glob("*.txt"))
     if not files:
         print(f"\n[warn] no label files under {label_dir}")
         return {}
+
+    # Case-insensitive, so a frame saved as .JPG is not silently left out of
+    # the pixel statistics on a case-sensitive filesystem.
+    sources = {}
+    for candidate in sorted(image_dir.iterdir()):
+        if candidate.suffix.lower() in IMAGE_SUFFIXES:
+            sources.setdefault(candidate.stem, candidate)
 
     areas, cls_counter = [], Counter()
     px_area_640, px_area_imgsz = [], []
     dims_seen = Counter()
     for f in files:
-        img_path = next(
-            (
-                image_dir / f"{f.stem}{ext}"
-                for ext in (".jpg", ".jpeg", ".png")
-                if (image_dir / f"{f.stem}{ext}").exists()
-            ),
-            None,
-        )
+        img_path = sources.get(f.stem)
         W = H = None
         if img_path is not None:
             # PIL.Image.open is lazy: .size comes from the header, so this
@@ -304,6 +306,17 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
             f"but none contained a valid box -- nothing to summarise."
         )
         return {}
+
+    # The box count and the frame-area median cover every label; the COCO
+    # shares and the pixel medians below need the source image's size, so they
+    # cover only the boxes whose image was found. Say so when those differ,
+    # rather than printing "N boxes" over shares computed from a subset.
+    sized = len(px_area_640)
+    if 0 < sized < len(areas):
+        print(
+            f"\n[warn] {len(areas) - sized} of {len(areas)} boxes have no readable "
+            f"source image; the scale shares and pixel medians use only {sized}."
+        )
 
     areas = np.asarray(areas)
     # COCO's convention: "small" is <32x32 px, "medium" <96x96. Apply it to the
@@ -355,7 +368,6 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         )
     print("     This is the argument for training at higher resolution.")
 
-    names = cfg.get("names", {})
     print("\n  class balance:")
     for c, n in cls_counter.most_common():
         print(f"    {names.get(c, c):<20} {n:>8,}  ({n / len(areas) * 100:5.1f} %)")
@@ -363,6 +375,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     return {
         "split": split,
         "boxes": len(areas),
+        "boxes_with_source_dims": sized,
         "images": len(files),
         "share_pct_coco_at_640": {
             "small_lt_32x32px": None if small is None else round(float(small), 1),
@@ -425,12 +438,25 @@ def _with_data_root(data: str, root: Path) -> Path:
     """
     import yaml
 
-    spec = yaml.safe_load(Path(data).read_text(encoding="utf-8"))
-    spec["path"] = str(root)
+    # A bundled name such as the default VisDrone.yaml is not a file in the
+    # working directory; Ultralytics finds it in its own package, and so must
+    # this, or --data-root with the default --data died on FileNotFoundError.
+    if Path(data).is_file():
+        source = Path(data)
+    else:
+        from ultralytics.utils.checks import check_yaml
+
+        source = Path(check_yaml(data))
+    # encoding must be explicit: Python on Windows defaults to cp1252, which
+    # chokes on the non-ASCII bytes in Ultralytics' bundled dataset yamls.
+    spec = yaml.safe_load(source.read_text(encoding="utf-8"))
+    # Absolute: a relative root would be resolved against the datasets
+    # directory by Ultralytics, not against where the command was run.
+    spec["path"] = str(Path(root).expanduser().resolve())
     # mkstemp rather than NamedTemporaryFile: the file has to outlive this
     # function so ultralytics can read it, which means delete=False, and a
     # NamedTemporaryFile opened that way is a context manager whose exit does
-    # nothing useful.
+    # nothing useful. main() deletes it once the run is over.
     descriptor, name = tempfile.mkstemp(suffix=".yaml")
     os.close(descriptor)
     written = Path(name)
@@ -457,7 +483,12 @@ def _portable(path_or_name: str | Path) -> str:
 
 
 def _provenance(
-    weights: Path, data: str, imgsz: int, device: str, split: str, data_root: str | None
+    weights: Path | None,
+    data: str,
+    imgsz: int,
+    device: str,
+    split: str,
+    data_root: str | None,
 ) -> dict:
     """What the accuracy figures need beside them to mean anything.
 
@@ -465,14 +496,36 @@ def _provenance(
     altogether from reports/evaluation.json, which is the usual outcome: the
     file that someone remembered has provenance, the file that came first does
     not, and neither can be checked. Everything below is read from the run.
+
+    `weights` is None for --split train, which reads labels only: no model, so
+    no checkpoint digest, device or selection claim to record, and no torch.
     """
     import datetime
     import hashlib
 
-    import torch
     import ultralytics
 
+    common = {
+        "run_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+        "split": SPLIT_DESCRIPTIONS.get(split, split),
+        "data": _portable(data),
+        "imgsz": imgsz,
+        "ultralytics": ultralytics.__version__,
+        "data_root_overridden": data_root is not None,
+    }
+    if weights is None:
+        return common
+
+    import torch
+
     digest = hashlib.sha256(Path(weights).read_bytes()).hexdigest()
+    # The device that ran, not the build: torch.version.cuda is what torch was
+    # compiled against, so a --device cpu run recorded "12.4", and card 0's
+    # name was recorded whatever --device said.
+    requested = str(device).strip().lower()
+    uses_cuda = requested not in {"cpu", "mps", "mps:0"} and torch.cuda.is_available()
+    first = requested.split(",")[0].strip().removeprefix("cuda:")
+    index = int(first) if first.isdigit() else 0
     provenance = {
         "run_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
         "checkpoint_sha256": digest,
@@ -482,9 +535,11 @@ def _provenance(
         "device": device,
         "torch": torch.__version__,
         "ultralytics": ultralytics.__version__,
-        "cuda": torch.version.cuda,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "selection": SELECTION_NOTE,
+        "cuda": torch.version.cuda if uses_cuda else None,
+        "gpu": torch.cuda.get_device_name(index) if uses_cuda else None,
+        # The selection history is the release checkpoint's. Recorded for any
+        # other checkpoint it would be a claim about a model it never described.
+        "selection": SELECTION_NOTE if digest == RELEASE_SHA256 else None,
         # A fact about the run, not an apology in a string: the spec above is
         # the committed one, and its `path:` was pointed elsewhere.
         "data_root_overridden": data_root is not None,
@@ -500,7 +555,12 @@ def _provenance(
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--weights", required=True, type=Path)
+    p.add_argument(
+        "--weights",
+        type=Path,
+        default=None,
+        help="Required for --split val/test. --split train reads labels only.",
+    )
     p.add_argument("--data", default="VisDrone.yaml")
     p.add_argument(
         "--imgsz",
@@ -535,9 +595,10 @@ def main() -> None:
         "so a second split cannot silently overwrite the first.",
     )
     args = p.parse_args()
-    # Checked now: --split train walks every label before it would first touch
-    # the weights, and a missing file then surfaced as a traceback at the end.
-    if not args.weights.is_file():
+    if args.split in {"val", "test"} and args.weights is None:
+        p.error(f"--weights is required for --split {args.split}")
+    # Checked now, before two full .val() passes or a walk over every label.
+    if args.weights is not None and not args.weights.is_file():
         p.error(f"--weights {args.weights} not found")
 
     if args.out is None:
@@ -549,34 +610,47 @@ def main() -> None:
 
     # Everything downstream reads the resolved spec; only the report names the
     # committed one.
-    spec = (
-        str(_with_data_root(args.data, Path(args.data_root)))
-        if args.data_root
-        else args.data
+    temp_spec = (
+        _with_data_root(args.data, Path(args.data_root)) if args.data_root else None
     )
-
-    report = {
-        "accuracy": (
-            per_class_table(args.weights, spec, args.imgsz, args.device, args.split)
-            if args.split in {"val", "test"}
-            else None
-        ),
-        "label_scale": label_size_distribution(spec, args.split, args.imgsz),
-        "config": {
-            "weights": _portable(args.weights),
-            "data": _portable(args.data),
-            "imgsz": args.imgsz,
-            "split": args.split,
-        },
-        "provenance": _provenance(
-            args.weights,
-            args.data,
-            args.imgsz,
-            args.device,
-            args.split,
-            args.data_root,
-        ),
-    }
+    spec = str(temp_spec) if temp_spec else args.data
+    try:
+        # Labels first: they need no GPU, and a spec problem found here costs
+        # seconds. Found after the two .val() passes, it cost minutes and wrote
+        # nothing. An empty result is a failure, not a report with a hole in it.
+        label_scale = label_size_distribution(spec, args.split, args.imgsz)
+        if not label_scale:
+            raise SystemExit(
+                "no labelled boxes found for this split, so there is no "
+                "label_scale to report; nothing was written"
+            )
+        report = {
+            "accuracy": (
+                per_class_table(args.weights, spec, args.imgsz, args.device, args.split)
+                if args.split in {"val", "test"}
+                else None
+            ),
+            "label_scale": label_scale,
+            "config": {
+                "weights": _portable(args.weights) if args.weights else None,
+                "data": _portable(args.data),
+                "imgsz": args.imgsz,
+                "split": args.split,
+            },
+            "provenance": _provenance(
+                args.weights,
+                args.data,
+                args.imgsz,
+                args.device,
+                args.split,
+                args.data_root,
+            ),
+        }
+    finally:
+        # It holds this machine's dataset path, and was left in the temp
+        # directory by every --data-root run.
+        if temp_spec is not None:
+            temp_spec.unlink(missing_ok=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     # allow_nan=False: this file exists to be quoted, so it has to be readable
