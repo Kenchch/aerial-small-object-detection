@@ -98,9 +98,10 @@ def _register_cudnn() -> bool:
 
 # One number, three places used to disagree: the CLI defaulted to 0.002, the
 # function it calls defaulted to 0.01, and DESIGN.md quoted 0.01. Whichever a
-# reader checked, one of the others was wrong. The measured delta is 0.0007, so
-# 0.002 is the tolerance that would actually catch a regression; 0.01 is loose
-# enough to pass an export that changed the model.
+# reader checked, one of the others was wrong. The FP32 export measures 0.0000
+# like-for-like (and FP16 about 0.001), so 0.002 is the tolerance that would
+# actually catch a regression; 0.01 is loose enough to pass an export that
+# changed the model.
 MAP_TOLERANCE = 0.002
 
 WARMUP_ITERS = 20
@@ -403,6 +404,75 @@ def bench_onnx(onnx_path: Path, imgsz: int, provider: str) -> dict:
     return {"core": core, "transfer_inclusive": transfer_inclusive}
 
 
+def cuda_core_runner(onnx_path: Path, imgsz: int):
+    """A warmed-up, zero-argument callable running one IOBinding inference.
+
+    The same device-resident measurement bench_onnx calls `core`, made
+    reusable so two graphs can be timed in alternating blocks. The session is
+    created and warmed before it is returned, so neither the provider's
+    algorithm search nor lazy initialisation lands inside a timed block.
+    """
+    _register_cudnn()
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CUDAExecutionProvider"])
+    if "CUDAExecutionProvider" not in sess.get_providers():
+        raise RuntimeError(f"CUDA provider did not load for {onnx_path.name}")
+    name, dummy = _dummy_input(sess, imgsz)
+    binding = sess.io_binding()
+    gpu_in = ort.OrtValue.ortvalue_from_numpy(dummy, "cuda", 0)
+    binding.bind_input(name, "cuda", 0, dummy.dtype, gpu_in.shape(), gpu_in.data_ptr())
+    for out in sess.get_outputs():
+        binding.bind_output(out.name, "cuda", 0)
+
+    def run():
+        sess.run_with_iobinding(binding)
+
+    for _ in range(WARMUP_ITERS):
+        run()
+    return run
+
+
+def interleaved_speedup(
+    run_new, run_reference, blocks: int = 10, per_block: int = 10, clock=None
+) -> dict:
+    """How much faster `run_new` is than `run_reference`, measured in
+    alternating blocks rather than one after the other.
+
+    The FP16 ratio came from two single 100-iteration blocks in fixed order,
+    about 20 s apart with a CPU benchmark between them, on a card whose own
+    history here shows a +-14% spread with thermal state. Alternating blocks
+    in ABBA order puts both graphs under the same conditions and cancels a
+    steady drift; the spread of the per-block ratios says how stable the
+    answer is, which one pair of medians cannot.
+    """
+    clock = clock or time.perf_counter
+
+    def block(fn) -> float:
+        times = []
+        for _ in range(per_block):
+            start = clock()
+            fn()
+            times.append((clock() - start) * 1000)
+        return statistics.median(times)
+
+    ratios = []
+    for i in range(blocks):
+        if i % 2 == 0:
+            new, ref = block(run_new), block(run_reference)
+        else:
+            ref, new = block(run_reference), block(run_new)
+        ratios.append(100 * (1 - new / ref))
+    return {
+        "speedup_pct_median": round(statistics.median(ratios), 1),
+        "speedup_pct_min": round(min(ratios), 1),
+        "speedup_pct_max": round(max(ratios), 1),
+        "blocks": blocks,
+        "iters_per_block": per_block,
+        "order": "ABBA, alternating per block",
+    }
+
+
 def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     """Count how many graph nodes actually ran on CUDA.
 
@@ -440,6 +510,57 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
         trace.unlink(missing_ok=True)
 
     return placement_from_events(events)
+
+
+def pytorch_accuracy(yolo, weights, data, imgsz, device, val_dir) -> tuple:
+    """The headline mAP, and the baseline the export is gated against.
+
+    Two passes, because they answer different questions. The headline uses
+    Ultralytics' default for .val(), rect=True - rectangular letterboxing, the
+    same protocol as src/evaluate.py, so the two reports agree. The static ONNX
+    graph cannot do that: Ultralytics forces rect=False for it, a square
+    letterbox. Gating ONNX against the rect=True figure measured two
+    preprocessing schemes, not the export - on a small set the difference was
+    +0.33 mAP50 with an export that was in fact exact. So the gate's PyTorch
+    side is measured square as well.
+    """
+    model = yolo(str(weights))
+    common = {"data": data, "imgsz": imgsz, "device": device, "verbose": False}
+    headline = model.val(**common, project=str(val_dir), name="pytorch", exist_ok=True)
+    square = model.val(
+        **common, rect=False, project=str(val_dir), name="pytorch-square", exist_ok=True
+    )
+    return (
+        {
+            "mAP50": _validated_map("PyTorch mAP50", headline.box.map50),
+            "mAP50_95": _validated_map("PyTorch mAP50-95", headline.box.map),
+        },
+        {
+            "mAP50": _validated_map("PyTorch square mAP50", square.box.map50),
+            "mAP50_95": _validated_map("PyTorch square mAP50-95", square.box.map),
+        },
+    )
+
+
+def onnx_accuracy(yolo, onnx_path, data, imgsz, device, half, val_dir) -> dict:
+    """The exported graph's mAP, square like its gate baseline. rect=False is
+    what Ultralytics would force for a static graph anyway; it is passed so
+    the two sides of the gate visibly share one protocol."""
+    metrics = yolo(str(onnx_path), task="detect").val(
+        data=data,
+        imgsz=imgsz,
+        device=device,
+        half=half,
+        rect=False,
+        verbose=False,
+        project=str(val_dir),
+        name="onnx",
+        exist_ok=True,
+    )
+    return {
+        "mAP50": _validated_map("ONNX mAP50", metrics.box.map50),
+        "mAP50_95": _validated_map("ONNX mAP50-95", metrics.box.map),
+    }
 
 
 def onnx_cuda_runnable(cuda_device: bool, providers: list[str]) -> bool:
@@ -731,22 +852,17 @@ def run_one(
     # command died here with PermissionError. Where these go does not touch any
     # number; in the container they land beside the export cache on /out.
     val_dir = (cache_dir or Path(tempfile.gettempdir())) / "val-runs"
-    metrics = YOLO(str(weights)).val(
-        data=data,
-        imgsz=imgsz,
-        device=device,
-        verbose=False,
-        project=str(val_dir),
-        name="pytorch",
-        exist_ok=True,
+    headline, pytorch_square = pytorch_accuracy(
+        YOLO, weights, data, imgsz, device, val_dir
     )
-    pytorch_map50 = _validated_map("PyTorch mAP50", metrics.box.map50)
-    pytorch_map95 = _validated_map("PyTorch mAP50-95", metrics.box.map)
     row = {
         "imgsz": imgsz,
         "precision": "FP16" if half else "FP32",
-        "mAP50": round(pytorch_map50, 4),
-        "mAP50_95": round(pytorch_map95, 4),
+        # The PyTorch FP32 model at rect=True, the protocol evaluate.py uses -
+        # in the FP16 report too, where it is the baseline and not the graph.
+        "mAP50": round(headline["mAP50"], 4),
+        "mAP50_95": round(headline["mAP50_95"], 4),
+        "mAP_source": "PyTorch FP32, rect=True (evaluate.py's protocol)",
     }
     print(f"  mAP50={row['mAP50']}  mAP50-95={row['mAP50_95']}")
 
@@ -797,27 +913,12 @@ def run_one(
     # latency invites the reader to assume the export preserved accuracy, which
     # is an assumption and not a measurement -- opset choice, constant folding
     # and fp precision can all move it.
-    onnx_metrics = YOLO(str(onnx_path), task="detect").val(
-        data=data,
-        imgsz=imgsz,
-        device=device,
-        half=half,
-        verbose=False,
-        project=str(val_dir),
-        name="onnx",
-        exist_ok=True,
-    )
-    onnx_map50 = _validated_map("ONNX mAP50", onnx_metrics.box.map50)
-    onnx_map95 = _validated_map("ONNX mAP50-95", onnx_metrics.box.map)
+    onnx_map = onnx_accuracy(YOLO, onnx_path, data, imgsz, device, half, val_dir)
     row["accuracy"] = {
-        "pytorch": {
-            "mAP50": round(pytorch_map50, 4),
-            "mAP50_95": round(pytorch_map95, 4),
-        },
-        "onnx": {
-            "mAP50": round(onnx_map50, 4),
-            "mAP50_95": round(onnx_map95, 4),
-        },
+        # Both sides square-letterboxed; see pytorch_accuracy.
+        "protocol": {"rect": False},
+        "pytorch": {k: round(v, 4) for k, v in pytorch_square.items()},
+        "onnx": {k: round(v, 4) for k, v in onnx_map.items()},
     }
     print(
         f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
@@ -841,8 +942,6 @@ def run_one(
         check_placement(placement, allow_cpu_fallback)
     else:
         print("  ONNXRuntime GPU: skipped (no CUDA device, or CPU-only onnxruntime)")
-    row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
-    print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
     # The FP16 number is only useful as a ratio, and this repository's own
     # README says latency is reproducible within a session and not across them
@@ -875,12 +974,23 @@ def run_one(
                 "re-validated here; reports/benchmark.json is the FP32 record."
             ),
         }
-        speedup = speedup_pct(
+        # Two single blocks, one after the other: kept for continuity, but
+        # `interleaved` below is the figure to quote.
+        row["fp32_reference"]["core_speedup_pct"] = speedup_pct(
             row["onnx_cuda"]["core"]["median_ms"], reference["core"]["median_ms"]
         )
-        row["fp32_reference"]["core_speedup_pct"] = speedup
+        row["fp32_reference"]["interleaved"] = interleaved_speedup(
+            cuda_core_runner(onnx_path, imgsz), cuda_core_runner(fp32_path, imgsz)
+        )
         print(f"  FP32 reference (same session): {reference['core']}")
-        print(f"  FP16 core speedup: {speedup:.1f}%")
+        print(
+            f"  FP16 core speedup, interleaved: {row['fp32_reference']['interleaved']}"
+        )
+
+    # Last: the CPU run leaves the GPU idle for ~20 s, and nothing measured on
+    # the GPU should come after that gap and be compared with what came before.
+    row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
+    print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
     row["environment"] = _environment(imgsz)
     return row

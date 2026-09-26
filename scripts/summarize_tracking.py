@@ -63,8 +63,10 @@ def _check_complete(path, run):
     stage used to surface as a bare TypeError from sum()."""
     if run["source"].get("ran_with_mismatch"):
         raise SystemExit(f"{path.name}: ran on a clip that does not match its record")
-    if run.get("output") is None or any(
-        run["stage_ms_median"].get(stage) is None for stage in STAGES
+    if (
+        run.get("output") is None
+        or run.get("steady_state") is None
+        or any(run["stage_ms_median"].get(stage) is None for stage in STAGES)
     ):
         raise SystemExit(
             f"{path.name}: not a full decode+infer+annotate+encode run "
@@ -108,17 +110,12 @@ def summarize(repeats: Path) -> dict:
         checkpoint = f"checkpoint {config['weights']} (sha256 {digest[:12]})"
     count = NUMBER_WORDS[len(runs)] if len(runs) < len(NUMBER_WORDS) else str(len(runs))
 
-    # Steady state is every stage's median summed, not the largest one: decode,
-    # annotate and encode still happen on every frame once the cold start is
-    # behind you. Summing medians rather than taking a median of sums is what
-    # drops the first frame -- it costs about 180x a normal one, and it moves a
-    # mean but not a median over 90 frames.
-    # Rounded to the precision the stages themselves carry: summing four
-    # 2-decimal figures in binary yields 43.74999999999999, and a report full
-    # of that reads as more precision than the measurement has.
-    steady_ms = [
-        round(sum(run["stage_ms_median"][stage] for stage in STAGES), 2) for run in runs
-    ]
+    # Steady state is each run's own measurement: every frame after the first
+    # (which carries the cold start), frames over the time they took. It used
+    # to be the sum of the four stages' medians, which come from different
+    # frames and so describe no frame; the stages are right-skewed, and that
+    # sum read 1-3% fast.
+    steady_ms = [run["steady_state"]["frame_ms_mean"] for run in runs]
     fields = {
         "wall_seconds": [run["wall_s"] for run in runs],
         "end_to_end_fps": [run["end_to_end_fps"] for run in runs],
@@ -126,10 +123,7 @@ def summarize(repeats: Path) -> dict:
             run["stage_ms_median"]["detect_and_track"] for run in runs
         ],
         "steady_state_frame_ms": steady_ms,
-        # Per repeat, then summarised -- not 1000 / the summarised ms. The two
-        # differ, and the one that means "the throughput half the runs beat" is
-        # this one.
-        "steady_state_fps": [round(1000 / ms, 1) for ms in steady_ms],
+        "steady_state_fps": [run["steady_state"]["fps"] for run in runs],
     }
     summary = {
         "runs": len(runs),
@@ -137,8 +131,9 @@ def summarize(repeats: Path) -> dict:
         "protocol": (
             f"{count} separate Python processes; decode, inference, annotation "
             f"and encoding enabled. Wall time includes model warm-up within "
-            f"tracking; steady_state_* sums per-stage medians and so excludes "
-            f"it. Same {frames}-frame source (sha256 {source[:12]}) and "
+            f"tracking; steady_state_* is frames 2-{frames} over the time they "
+            f"took, excluding it. Same {frames}-frame source (sha256 "
+            f"{source[:12]}) and "
             f"{checkpoint}."
         ),
         "statistics": {},

@@ -584,6 +584,30 @@ def print_report(report: dict, n_frames: int, wall: float) -> None:
     )
 
 
+def steady_state(t_decode, t_infer, t_draw, t_write) -> dict | None:
+    """Per-frame throughput with the cold first frame left out.
+
+    Each frame's total across the four stages, frame by frame - not the sum of
+    four per-stage medians, which usually come from different frames, so their
+    sum is a time no frame took (the same reason association_remainders works
+    per frame). Stages are right-skewed, so that sum ran about 1-3% fast.
+    """
+    write = t_write or [0.0] * len(t_decode)
+    totals = [
+        d + i + a + w
+        for d, i, a, w in zip(t_decode, t_infer, t_draw, write, strict=True)
+    ]
+    tail = totals[1:]  # frame 0 carries CUDA context creation and autotuning
+    if not tail or not sum(tail):
+        return None
+    return {
+        "frames_excluded": 1,
+        "frame_ms_median": round(statistics.median(tail), 2),
+        "frame_ms_mean": round(sum(tail) / len(tail), 2),
+        "fps": round(1000 * len(tail) / sum(tail), 1),
+    }
+
+
 def build_report(
     *,
     t_decode: list[float],
@@ -691,6 +715,9 @@ def build_report(
             "postprocess_nms": round(med(t_post), 2),
             "association_and_overhead": round(assoc_median, 2),
         },
+        # Measured throughput once the first frame is behind: frames over the
+        # time they took, the figure the repeats summarise.
+        "steady_state": steady_state(t_decode, t_infer, t_draw, t_write),
         "warmup": {
             "first_frame_ms": round(t_infer[0], 1) if t_infer else None,
             "steady_state_ms": round(med(t_infer), 2),

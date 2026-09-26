@@ -1,0 +1,66 @@
+{
+  "sessions": [
+    "reports/benchmark.json",
+    "reports/benchmark_repeats/run_1.json",
+    "reports/benchmark_repeats/run_2.json",
+    "reports/benchmark_repeats/run_3.json"
+  ],
+  "protocol": "4 separate processes of src/benchmark.py, same checkpoint (sha256 8786213fc488), same machine; every ratio is within one session.",
+  "per_session": [
+    {
+      "onnx_cuda_core_ms": 10.03,
+      "pytorch_cuda_core_ms": 12.83,
+      "onnx_vs_eager_core_pct": 21.8,
+      "onnx_vs_eager_transfer_pct": 23.1,
+      "cpu_vs_cuda_x": 9.7
+    },
+    {
+      "onnx_cuda_core_ms": 9.58,
+      "pytorch_cuda_core_ms": 12.79,
+      "onnx_vs_eager_core_pct": 25.1,
+      "onnx_vs_eager_transfer_pct": 24.7,
+      "cpu_vs_cuda_x": 12.8
+    },
+    {
+      "onnx_cuda_core_ms": 9.54,
+      "pytorch_cuda_core_ms": 12.81,
+      "onnx_vs_eager_core_pct": 25.5,
+      "onnx_vs_eager_transfer_pct": 26.4,
+      "cpu_vs_cuda_x": 10.8
+    },
+    {
+      "onnx_cuda_core_ms": 11.7,
+      "pytorch_cuda_core_ms": 12.55,
+      "onnx_vs_eager_core_pct": 6.8,
+      "onnx_vs_eager_transfer_pct": 11.7,
+      "cpu_vs_cuda_x": 8.8
+    }
+  ],
+  "statistics": {
+    "onnx_cuda_core_ms": {
+      "median": 9.805,
+      "min": 9.54,
+      "max": 11.7
+    },
+    "pytorch_cuda_core_ms": {
+      "median": 12.8,
+      "min": 12.55,
+      "max": 12.83
+    },
+    "onnx_vs_eager_core_pct": {
+      "median": 23.450000000000003,
+      "min": 6.8,
+      "max": 25.5
+    },
+    "onnx_vs_eager_transfer_pct": {
+      "median": 23.9,
+      "min": 11.7,
+      "max": 26.4
+    },
+    "cpu_vs_cuda_x": {
+      "median": 10.25,
+      "min": 8.8,
+      "max": 12.8
+    }
+  }
+}

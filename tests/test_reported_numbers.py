@@ -106,22 +106,18 @@ def test_end_to_end_throughput_matches():
     assert float(fps) == TRACKING["end_to_end_fps"]
 
 
-def test_the_steady_state_figure_is_the_sum_of_the_stage_medians():
-    """Derived, not measured - so it is checked by recomputing it.
+def test_the_steady_state_figure_is_the_runs_measurement():
+    """Measured per frame (frames 2-90) and recorded in the report, not the
+    sum of four stage medians that came from different frames.
 
-    "for this run" is load-bearing in the pattern below. The sentence used to
-    read "which gives", and the figure it introduces turned out to be faster
-    than all five repeats of the same protocol; the qualifier is what stops it
-    reading as the rate rather than as one run's rate. Matching it here means
-    dropping the qualifier fails this test rather than quietly restoring the
-    old claim.
+    "for this run" is load-bearing in the pattern: it is what stops the
+    sentence reading as the rate rather than as one run's rate.
     """
     stated_ms, stated_fps = _one(
-        r"which for this run gives \*\*([\d.]+) ms/frame → ([\d.]+) FPS\*\*"
+        r"which for this run is \*\*([\d.]+) ms/frame →\s*([\d.]+) FPS\*\*"
     )
-    steady = sum(v for v in TRACKING["stage_ms_median"].values() if v)
-    assert float(stated_ms) == pytest.approx(steady, abs=0.01)
-    assert float(stated_fps) == pytest.approx(1000 / steady, abs=0.05)
+    assert float(stated_ms) == TRACKING["steady_state"]["frame_ms_mean"]
+    assert float(stated_fps) == TRACKING["steady_state"]["fps"]
 
 
 def test_the_first_frame_cost_matches():

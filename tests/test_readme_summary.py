@@ -62,14 +62,24 @@ def test_cpu_slowdown_matches_benchmark():
     )
 
 
-def test_the_other_sessions_speedup_is_the_one_its_report_gives():
-    """The headline 17% is one session; the --half run measured the same pair
-    in one process and got a different ratio, which the README now says."""
-    fp16 = _report("benchmark_fp16.json")
-    eager = fp16["pytorch_cuda"]["core"]["median_ms"]
-    fp32 = fp16["fp32_reference"]["onnx_cuda"]["core"]["median_ms"]
+def test_the_cross_session_range_is_the_summarys():
+    """The headline ratio is one session's; the README gives the spread across
+    separate sessions beside it, from their summary rather than retyped."""
+    s = _report("benchmark_repeats/summary.json")
+    st = s["statistics"]["onnx_vs_eager_core_pct"]
+    n = len(s["per_session"])
     readme = " ".join(_readme().split())
-    assert f"{100 * (1 - fp32 / eager):.0f}% where this run got" in readme
+    assert (
+        f"{st['min']:.0f}-{st['max']:.0f}% across {n} sessions "
+        f"(median {st['median']:.0f}%)" in readme
+    )
+    assert (
+        f"{st['min']:.0f}% to {st['max']:.0f}% faster, median {st['median']:.0f}%"
+        in (readme)
+    )
+    assert s["sessions"][0] == "reports/benchmark.json", (
+        "the headline run has to be one of the sessions the range covers"
+    )
 
 
 def test_node_placement_matches_benchmark():
@@ -159,33 +169,31 @@ def test_fp16_passed_the_same_accuracy_gate_as_the_fp32_export():
 
 
 def test_fp16_speedup_is_measured_within_one_session():
-    """The ratio has to come from one process.
+    """The ratio comes from one process, timed in alternating blocks.
 
-    This repository measured an 11% spread between sessions on this machine,
-    and the FP16 speedup is 16.8% -- so a cross-session comparison is the same
-    size as the effect. Taking the committed FP32 figure instead of the
-    same-session one turns 16.8% into 26%, which is why `--half` re-benchmarks
-    the FP32 graph rather than reading benchmark.json.
+    A cross-session comparison is the same size as the effect - the README
+    shows what it would have read - and two single blocks in fixed order let
+    the card's thermal state favour one graph. The README quotes the
+    interleaved median and the spread of the per-block ratios.
     """
     report = _report("benchmark_fp16.json")
     reference = report["fp32_reference"]
-    readme = _readme()
+    interleaved = reference["interleaved"]
+    readme = " ".join(_readme().split())
 
-    core16 = report["onnx_cuda"]["core"]["median_ms"]
-    core32 = reference["onnx_cuda"]["core"]["median_ms"]
-    stated = reference["core_speedup_pct"]
-
-    assert f"**{core16:.2f} ms**" in readme
-    assert f"against **{core32:.2f} ms**" in readme
-    assert f"**{stated}% faster**" in readme
+    assert f"**{report['onnx_cuda']['core']['median_ms']:.2f} ms**" in readme
+    assert f"against **{reference['onnx_cuda']['core']['median_ms']:.2f} ms**" in readme
+    assert f"**{interleaved['speedup_pct_median']}% faster**" in readme
+    assert (
+        f"ranging {interleaved['speedup_pct_min']}-{interleaved['speedup_pct_max']}%"
+        in readme
+    )
+    assert f"Timed in {interleaved['blocks']} alternating blocks" in readme
+    assert interleaved["order"].startswith("ABBA")
     assert (
         f"it was {report['onnx_cuda']['transfer_inclusive']['median_ms']:.2f} ms"
         in readme
     )
-
-    # The percentage is the two milliseconds, not a third number typed beside
-    # them.
-    assert stated == round(100 * (1 - core16 / core32), 1)
 
 
 def test_the_cross_session_figure_is_named_as_the_wrong_one():
@@ -323,37 +331,21 @@ def test_design_backend_ratios_match_the_benchmark():
 
 
 def test_design_states_every_repeat_and_the_median_it_took():
-    """DESIGN.md lists all five per-run figures, not just the summary.
-
-    The paragraph's argument is that the published headline sat outside the
-    spread, which a reader can only check if the spread is on the page. Five
-    numbers typed into prose is five chances to leave one behind.
-    """
+    """DESIGN.md lists all five per-run figures, not just the summary, so a
+    reader can see the spread the headline is the middle of."""
     s = json.loads(
         (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
     )
-    stats = s["statistics"]
-    design = _design()
-
     per_run = sorted(
-        round(
-            sum(
-                json.loads(p.read_text(encoding="utf-8"))["stage_ms_median"][stage]
-                for stage in ("decode", "detect_and_track", "annotate", "encode")
-            ),
-            2,
-        )
+        json.loads(p.read_text(encoding="utf-8"))["steady_state"]["fps"]
         for p in (ROOT / "reports/tracking_repeats").glob("run_*.json")
     )
-    assert ", ".join(f"{ms:.2f}" for ms in per_run[:-1]) in design
-    assert f"and {per_run[-1]:.2f} ms/frame" in design
-
-    # The claim wraps across a line, so match its two halves rather than
-    # pinning the document's line breaks into a test.
-    ms, fps = stats["steady_state_frame_ms"], stats["steady_state_fps"]
-    assert f"median of **{ms['median']:.2f} ms," in design
-    assert f"{fps['median']:.1f} FPS**" in design
-    assert f"range of {fps['min']:.1f} to {fps['max']:.1f} FPS" in design
+    design = " ".join(_design().split())
+    assert f"gives {', '.join(str(x) for x in per_run[:-1])} and {per_run[-1]} FPS" in (
+        design
+    )
+    median = s["statistics"]["steady_state_fps"]["median"]
+    assert f"a median of **{median} FPS**" in design
 
 
 def test_design_tolerance_matches_the_constant():
@@ -393,48 +385,37 @@ def test_a_changed_report_would_fail_these_assertions():
 
 
 def test_the_steady_state_headline_is_not_a_single_run():
-    """The first screen quoted 25.8 FPS, derived from one run, and that run was
-    faster than all five repeats -- the headline was the best result rather
-    than the typical one. Nothing may re-enter the README that sits outside the
-    measured spread.
+    """The first screen once quoted one run's rate, and that run was faster
+    than all five repeats - the best result rather than the typical one. The
+    headline is the repeats' median; and DESIGN.md's claim that the committed
+    single run now sits inside their spread has to stay true.
     """
     s = json.loads(
         (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
     )
     steady = s["statistics"]["steady_state_fps"]
-    single = _report("tracking.json")["stage_ms_median"]
-    derived = 1000 / sum(
-        single[stage] for stage in ("decode", "detect_and_track", "annotate", "encode")
+    single = _report("tracking.json")["steady_state"]["fps"]
+    assert steady["min"] <= single <= steady["max"], (
+        "the single run is outside the repeats' spread again, and DESIGN.md "
+        "says otherwise"
     )
-    assert derived > steady["max"], (
-        "the single committed run is no longer faster than every repeat, so "
-        "this test's premise has changed and the DESIGN.md paragraph that "
-        "states it needs rechecking"
-    )
-    assert f"{derived:.1f} FPS steady-state" not in _readme(), (
-        "the first screen is quoting the single run's rate again"
+    assert f"{steady['median']:.1f} FPS steady-state, median of five repeats" in (
+        _readme()
     )
 
 
 def test_the_summary_reports_the_steady_state_it_can_derive():
-    """summarize_tracking.py sums the four per-frame stage medians. If a repeat
-    report stops carrying one of them, the summary would silently describe a
-    different quantity under the same name."""
+    """Every repeat carries its own measured steady state, and the summary's
+    per-run figures are exactly those - not re-derived from stage medians."""
     s = json.loads(
         (ROOT / "reports/tracking_repeats/summary.json").read_text(encoding="utf-8")
     )
     runs = sorted((ROOT / "reports/tracking_repeats").glob("run_*.json"))
     assert len(runs) == s["runs"]
-    for path in runs:
-        stages = json.loads(path.read_text(encoding="utf-8"))["stage_ms_median"]
-        assert set(stages) == {"decode", "detect_and_track", "annotate", "encode"}, (
-            f"{path.name} carries stages the summary does not sum: {sorted(stages)}"
-        )
-
-
-# --------------------------------------------------------------------------- #
-# label_scale -- reports/evaluation.json and reports/evaluation_train.json
-# --------------------------------------------------------------------------- #
+    fps = [
+        json.loads(p.read_text(encoding="utf-8"))["steady_state"]["fps"] for p in runs
+    ]
+    assert s["statistics"]["steady_state_fps"]["median"] == sorted(fps)[len(fps) // 2]
 
 
 def test_readme_small_object_share_matches_evaluation():
