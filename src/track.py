@@ -21,12 +21,20 @@ Usage
 import argparse
 import hashlib
 import json
+import os
 import re
 import statistics
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+# Read when ultralytics is imported, so set before anything can import it.
+# No run-time pip installs (lap is pinned in requirements.txt instead), and
+# checkpoints loaded with torch's weights_only unpickler rather than full
+# pickle. See benchmark.py for why each matters.
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
+os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 
 # cv2/numpy/ultralytics are imported inside the functions that use them, after
 # parse_args(). At module scope they pin `--help` to a fully provisioned
@@ -516,7 +524,7 @@ def print_report(report: dict, n_frames: int, wall: float) -> None:
     print(f"\n{'=' * 60}")
     print(
         f"  Tracked {n_frames} frames in {wall:.1f} s "
-        f"— {report['end_to_end_fps']} FPS end-to-end"
+        f"- {report['end_to_end_fps']} FPS end-to-end"
     )
     print(f"{'=' * 60}")
     md, mn = report["stage_ms_median"], report["stage_ms_mean"]
@@ -538,14 +546,14 @@ def print_report(report: dict, n_frames: int, wall: float) -> None:
     w = report["warmup"]
     print(
         f"\n  first frame  : {w['first_frame_ms']} ms  "
-        f"({w['warmup_penalty_x']}× steady state)"
+        f"({w['warmup_penalty_x']}x steady state)"
     )
 
     t = report["tracks"]
     print(f"\n  unique tracks      : {t['unique_ids']}")
     print(
         f"  highest id seen    : {t['highest_id_seen']}  "
-        f"(churn ≥{t['id_churn_ratio_min']}× — tentative tracks per confirmed one)"
+        f"(churn >={t['id_churn_ratio_min']}x - tentative tracks per confirmed one)"
     )
     print(f"  boxes per frame    : {t['mean_boxes_per_frame']}")
     print(f"  mean track length  : {t['mean_track_len_frames']} frames")
@@ -958,7 +966,10 @@ def run_tracking(model, pipe: Pipeline, args) -> Timings:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    p = build_parser()
+    args = p.parse_args()
+    if not args.weights.is_file():
+        p.error(f"--weights {args.weights} not found")
     protected_paths = {
         args.source.resolve(),
         args.weights.resolve(),
@@ -1070,8 +1081,6 @@ def main() -> None:
             args=args,
         )
 
-        print_report(report, n_frames, wall)
-
         out_json = args.report
         out_json.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1113,6 +1122,12 @@ def main() -> None:
         args.report.with_suffix(".json.tmp").unlink(missing_ok=True)
         raise
 
+    # Console output only once both artefacts are published. It used to run
+    # inside the guard above, so a console that could not encode one character
+    # - `≥` under cp1252, which is what Windows gives a redirected stdout -
+    # raised there, and the guard deleted a finished run's video and report.
+    # The report is ASCII now as well, so it no longer fails at all.
+    print_report(report, n_frames, wall)
     print(f"\n  metrics -> {out_json}")
     if writer is not None:
         print(f"  video   -> {args.out}")

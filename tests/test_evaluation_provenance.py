@@ -83,6 +83,31 @@ def test_the_pinned_release_digest_is_the_one_the_gpu_test_downloads():
     assert RELEASE_SHA256 in (ROOT / "tests/test_gpu.py").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("doc", ["README.md", "docs/DESIGN.md"])
+def test_the_documented_download_fails_loudly_and_is_verified(doc):
+    """Without -f, curl saved GitHub's 9-byte 'Not Found' page as best.pt and
+    exited 0; and nothing checked the digest the docs printed beside it."""
+    from evaluate import RELEASE_SHA256, RELEASE_URL
+
+    asset = RELEASE_URL.replace("/releases/tag/", "/releases/download/") + "/best.pt"
+    text = (ROOT / doc).read_text(encoding="utf-8")
+    assert f"curl -fL --retry 3 -o runs/n_1024/weights/best.pt \\\n  {asset}" in text
+    assert f'echo "{RELEASE_SHA256}  runs/n_1024/weights/best.pt" | sha256sum -c -' in (
+        text
+    )
+    assert "curl -L " not in text, "an unchecked download is still documented"
+
+
+def test_the_docker_tracking_example_writes_to_the_mounted_output():
+    """track.py's defaults are reports/ inside the image, which nothing mounts:
+    the documented command's results stayed in the container."""
+    design = (ROOT / "docs/DESIGN.md").read_text(encoding="utf-8")
+    command = design[design.index("aerial-detection src/track.py") :]
+    command = command[: command.index("\n\n")]
+    assert "--report /out/" in command
+    assert "--out /out/" in command
+
+
 @pytest.mark.parametrize("name", REPORTS)
 def test_no_machine_specific_path_reached_a_committed_report(name):
     """`_portable` exists for this. An absolute path from whichever machine last

@@ -12,7 +12,14 @@ Usage
 """
 
 import argparse
+import os
 from pathlib import Path
+
+# Read when ultralytics is imported, so set before anything can import it: no
+# pip installs at run time. (ULTRALYTICS_SAFE_LOAD is not defaulted here, as it
+# is in the evaluation scripts: resuming loads optimizer state, and that path
+# has not been checked under the weights_only unpickler.)
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
 # ultralytics is imported inside main(), after parse_args(). Importing it at
 # module scope pulls in torch and pins `--help` to a fully provisioned
@@ -20,6 +27,21 @@ from pathlib import Path
 # trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = PROJECT_ROOT / "runs"
+
+# The fresh-run defaults. The flags below default to None instead, so a resume
+# can tell "given on the command line" from "left at the default" and forward
+# only the former.
+FRESH_DEFAULTS = {
+    "data": "VisDrone.yaml",
+    "batch": 6,
+    "cache": "disk",
+    "workers": 8,
+    "device": "0",
+    "patience": 15,
+}
+# What Ultralytics lets a resume override. Anything else comes from the
+# checkpoint.
+RESUME_OVERRIDES = ("device", "batch", "workers", "cache", "patience")
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,9 +56,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--data",
-        default="VisDrone.yaml",
-        help="Ultralytics dataset spec. VisDrone.yaml auto-downloads "
-        "the dataset and converts its annotation format to YOLO.",
+        default=None,
+        help="Ultralytics dataset spec (default: VisDrone.yaml, which "
+        "auto-downloads the dataset and converts its annotation format "
+        "to YOLO). On --resume the checkpoint's own dataset wins, and "
+        "this is used only when that path does not exist here.",
     )
     p.add_argument(
         "--imgsz",
@@ -50,8 +74,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--batch",
         type=int,
-        default=6,
-        help="Set explicitly rather than using AutoBatch (-1). "
+        default=None,
+        help="Default 6. Set explicitly rather than using AutoBatch (-1). "
         "AutoBatch profiles a forward/backward pass and picks a "
         "size targeting ~60%% VRAM, but VisDrone's training split "
         "carries ~53 boxes/image (343,205 boxes / 6,471 images) "
@@ -64,9 +88,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--cache",
-        default="disk",
+        default=None,
         choices=["disk", "ram", "False"],
-        help="VisDrone frames are ~2000x1500 JPEGs; decoding them "
+        help="Default disk. VisDrone frames are ~2000x1500 JPEGs; decoding them "
         "every epoch makes the dataloader the bottleneck, not "
         "the GPU. 'disk' pre-decodes to .npy once. 'ram' is "
         "faster still but needs ~8 GB free.",
@@ -74,16 +98,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--workers",
         type=int,
-        default=8,
-        help="Dataloader processes. 8 of the 12 logical cores.",
+        default=None,
+        help="Dataloader processes. Default 8, of the 12 logical cores.",
     )
-    p.add_argument("--device", default="0")
+    p.add_argument("--device", default=None, help="Default '0'.")
     p.add_argument("--name", required=True, help="Run name under runs/")
     p.add_argument(
         "--patience",
         type=int,
-        default=15,
-        help="Early-stop patience on fitness. Untested at 1024px: "
+        default=None,
+        help="Default 15. Early-stop patience on fitness. Untested at 1024px: "
         "the recorded run never triggered this and was still "
         "improving at epoch 50 (see README, 'What this does "
         "not establish'), so 50 epochs is a budget here, not "
@@ -96,7 +120,9 @@ def parse_args() -> argparse.Namespace:
         help="Resume an interrupted run from runs/<name>/weights/last.pt. "
         "Ultralytics restores optimizer state, EMA and epoch "
         "counter from the checkpoint, so this is not the same "
-        "as fine-tuning from last.pt with a fresh optimizer.",
+        "as fine-tuning from last.pt with a fresh optimizer. "
+        "--device, --batch, --workers, --cache and --patience "
+        "given here override the checkpoint's; nothing else does.",
     )
     p.add_argument(
         "--overwrite",
@@ -112,21 +138,98 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _cache(value):
+    return False if value == "False" else value
+
+
+def _headline(results) -> tuple[str, str]:
+    """mAP50-95 and mAP50 from whatever train() returned.
+
+    A single-process run returns a metrics object with `.box`. Multi-GPU (DDP)
+    training returns a plain dict keyed like results.csv, and reading `.box`
+    off that raised AttributeError after training had succeeded, so the run
+    exited non-zero with its weights already written.
+    """
+    box = getattr(results, "box", None)
+    if box is not None:
+        return f"{box.map:.4f}", f"{box.map50:.4f}"
+    found = results if isinstance(results, dict) else {}
+
+    def fmt(key: str) -> str:
+        value = found.get(key)
+        return "n/a" if value is None else f"{float(value):.4f}"
+
+    return fmt("metrics/mAP50-95(B)"), fmt("metrics/mAP50(B)")
+
+
+def resume(args, load_checkpoint=None, yolo=None):
+    """Continue runs/<name>/ from last.pt, or refuse when that would not.
+
+    `train(resume=True)` alone did three things nobody asked for, all without
+    stopping. A FINISHED run's last.pt has its optimizer stripped, so
+    Ultralytics logged a warning and started a new 100-epoch run on its
+    default dataset, coco8, under runs/detect/train - and this script then
+    printed "RESUMED RUN COMPLETE". A checkpoint whose recorded dataset path
+    does not exist on this machine fell back to coco8 the same way, and its
+    output went wherever the checkpoint's project said. And --device/--batch
+    were never passed on, so the usual reasons to resume - a different card,
+    a smaller batch after running out of memory - were silently ignored.
+
+    The loaders are injected so this is testable without torch or ultralytics.
+    """
+    last = RUNS_DIR / args.name / "weights" / "last.pt"
+    if not last.exists():
+        raise SystemExit(f"cannot resume: {last} not found")
+
+    if load_checkpoint is None:  # pragma: no cover - exercised by a real run
+        import torch
+
+        def load_checkpoint(path):
+            return torch.load(path, map_location="cpu", weights_only=False)
+
+    ckpt = load_checkpoint(last)
+    if ckpt.get("epoch", -1) < 0 or ckpt.get("optimizer") is None:
+        raise SystemExit(
+            f"{last} is from a finished run (its optimizer state was stripped "
+            f"when training ended), so there is nothing to resume. Train under "
+            f"a new --name instead."
+        )
+    recorded = (ckpt.get("train_args") or {}).get("data")
+    if args.data is None and not (recorded and Path(recorded).exists()):
+        raise SystemExit(
+            f"the checkpoint's dataset {recorded!r} does not exist here; pass "
+            f"--data explicitly"
+        )
+    extra = {
+        k: getattr(args, k) for k in RESUME_OVERRIDES if getattr(args, k) is not None
+    }
+    if "cache" in extra:
+        extra["cache"] = _cache(extra["cache"])
+
+    if yolo is None:  # pragma: no cover - exercised by a real run
+        from ultralytics import YOLO as yolo
+
+    print(f"resuming from {last}")
+    return yolo(str(last)).train(
+        resume=True,
+        data=args.data or recorded,
+        save_dir=str(RUNS_DIR / args.name),
+        **extra,
+    )
+
+
 def main() -> None:
     args = parse_args()
 
-    from ultralytics import YOLO
-
     if args.resume:
-        last = RUNS_DIR / args.name / "weights" / "last.pt"
-        if not last.exists():
-            raise SystemExit(f"cannot resume: {last} not found")
-        print(f"resuming from {last}")
-        # On resume Ultralytics reloads every hyperparameter from the
-        # checkpoint, so passing them again here would be ignored.
-        results = YOLO(str(last)).train(resume=True)
-        print(f"\n=== RESUMED RUN COMPLETE ===\nmAP50-95 : {results.box.map:.4f}")
+        results = resume(args)
+        mAP, _ = _headline(results)
+        print(f"\n=== RESUMED RUN COMPLETE ===\nmAP50-95 : {mAP}")
         return
+
+    for key, value in FRESH_DEFAULTS.items():
+        if getattr(args, key) is None:
+            setattr(args, key, value)
 
     run_dir = RUNS_DIR / args.name
     if run_dir.exists() and not args.overwrite:
@@ -137,6 +240,8 @@ def main() -> None:
             f"--overwrite if replacing that run is what you intend."
         )
 
+    from ultralytics import YOLO
+
     model = YOLO(args.model)
 
     results = model.train(
@@ -144,7 +249,7 @@ def main() -> None:
         imgsz=args.imgsz,
         epochs=args.epochs,
         batch=args.batch,
-        cache=(False if args.cache == "False" else args.cache),
+        cache=_cache(args.cache),
         workers=args.workers,
         device=args.device,
         seed=args.seed,
@@ -171,8 +276,9 @@ def main() -> None:
 
     print("\n=== TRAINING COMPLETE ===")
     print(f"run       : {args.name}  (imgsz={args.imgsz})")
-    print(f"mAP50-95  : {results.box.map:.4f}")
-    print(f"mAP50     : {results.box.map50:.4f}")
+    mAP, mAP50 = _headline(results)
+    print(f"mAP50-95  : {mAP}")
+    print(f"mAP50     : {mAP50}")
     print(f"weights   : {RUNS_DIR / args.name / 'weights' / 'best.pt'}")
 
 

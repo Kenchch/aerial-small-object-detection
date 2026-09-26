@@ -94,6 +94,8 @@ def test_track_refuses_to_write_over_its_own_source(bare_env, tmp_path):
     """
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"not really a video, and never opened")
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"checkpoint")  # must exist: a missing one is refused first
     track_py = SRC_DIR / "track.py"
 
     proc = subprocess.run(
@@ -101,7 +103,7 @@ def test_track_refuses_to_write_over_its_own_source(bare_env, tmp_path):
             sys.executable,
             str(track_py),
             "--weights",
-            "best.pt",
+            str(weights),
             "--source",
             str(clip),
             "--out",
@@ -121,15 +123,17 @@ def test_track_refuses_to_write_over_its_own_source(bare_env, tmp_path):
 def test_profiling_only_may_reuse_the_path(bare_env, tmp_path):
     """--no-write opens no writer, so there is nothing to collide with. The
     guard must not refuse a run that cannot damage anything - it fails later,
-    on the blocked ultralytics import, which is the expected failure here."""
+    on the blocked torch import, which is the expected failure here."""
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"x")
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"checkpoint")
     proc = subprocess.run(
         [
             sys.executable,
             str(SRC_DIR / "track.py"),
             "--weights",
-            "best.pt",
+            str(weights),
             "--source",
             str(clip),
             "--out",

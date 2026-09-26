@@ -559,21 +559,24 @@ be updated without a rebuild:
 docker build -t aerial-detection .
 
 # Default command: benchmark the mounted checkpoint, write the report out.
-docker run --gpus all \
+docker run --user "$(id -u):$(id -g)" --gpus all \
   -v "$PWD/runs/n_1024/weights:/weights:ro" \
   -v "$PWD/datasets:/data:ro" \
   -v "$PWD/reports:/out" \
   aerial-detection
 
-# Anything else is an override of the command:
-docker run --gpus all \
+# Anything else is an override of the command. Name the outputs under /out:
+# track.py's defaults are reports/ inside the image, which is not mounted, so
+# without these the results never reach the host.
+docker run --user "$(id -u):$(id -g)" --gpus all \
   -v "$PWD/runs/n_1024/weights:/weights:ro" \
-  -v "$PWD/reports:/data" \
+  -v "$PWD/reports:/data:ro" \
   -v "$PWD/reports:/out" \
-  aerial-detection src/track.py --weights /weights/best.pt --source /data/demo_pan.mp4
+  aerial-detection src/track.py --weights /weights/best.pt \
+  --source /data/demo_pan.mp4 --report /out/tracking.json --out /out/track_out.mp4
 
 # Training needs the dataset mounted as well:
-docker run --gpus all \
+docker run --user "$(id -u):$(id -g)" --gpus all \
   -v "$PWD/datasets:/workspace/datasets" \
   -v "$PWD/runs:/workspace/runs" \
   aerial-detection src/train.py --model yolo11n.pt --imgsz 1024 --batch 6     --name n_1024_rerun
@@ -603,11 +606,21 @@ large for git. Fetch it from the release rather than retraining for 3.3 hours:
 
 ```bash
 mkdir -p runs/n_1024/weights
-curl -L -o runs/n_1024/weights/best.pt \
+curl -fL --retry 3 -o runs/n_1024/weights/best.pt \
   https://github.com/Kenchch/aerial-small-object-detection/releases/download/v1.0/best.pt
+echo "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e  runs/n_1024/weights/best.pt" | sha256sum -c -
 ```
 
 5,498,835 bytes (5.50 MB / 5.24 MiB), sha256 `8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e`.
+On macOS use `shasum -a 256 -c -` in place of `sha256sum -c -`; in PowerShell,
+compare `(Get-FileHash runs/n_1024/weights/best.pt).Hash` with the digest.
+
+Both halves matter. Without `-f`, curl saves GitHub's 9-byte "Not Found" page
+under the checkpoint's name and exits 0. And a `.pt` is a pickle: loaded the
+way Ultralytics loads it by default, a tampered one runs code. The digest is
+the check that the file is the one every number here came from, and the
+evaluation scripts additionally default to `ULTRALYTICS_SAFE_LOAD=1`, torch's
+restricted unpickler.
 
 The accuracy and latency numbers are reproducible from this checkpoint plus the
 VisDrone val split plus a comparable environment — `reports/benchmark.json`
@@ -696,7 +709,7 @@ src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
 src/make_demo_gif.py    README GIF from track_out.mp4, with its digest
 tests/                  unit tests; run with `pytest`
-scripts/resume.sh       restart an interrupted run from last.pt (Bash)
+scripts/resume.sh       restart an interrupted run: bash scripts/resume.sh [run_name] [flags]
 runs/                   training artefacts (weights gitignored)
 reports/                evaluation (val + train), benchmark, tracking output (JSON)
 ```

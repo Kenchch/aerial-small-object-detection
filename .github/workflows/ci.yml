@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, so a new advisory against a pin fails a build even in a week with
+  # no push - otherwise the audit below only runs when something else changes.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -72,14 +77,27 @@ jobs:
         # preference: this project's GPU driver (532.09) constrains it to the
         # cu124 build line, and every published metric and latency figure was
         # measured on it. Moving to 2.7+ would invalidate the numbers this repo
-        # exists to show. The advisories are remote-code-execution paths through
-        # loading untrusted checkpoints and malformed model files; this repo
-        # loads one checkpoint it produced itself.
+        # exists to show.
+        #
+        # What the ignored advisories are, since "RCE via checkpoints" is not
+        # an accurate summary of them. Most are operator bugs: wrong results
+        # (PairwiseDistance, bitwise_right_shift, FractionalMaxPool2d), crashes
+        # and denial of service (proxy_tensor, cummin, linalg.lu), and buffer
+        # or integer overflows (Conv2d, nan_to_num). Two concern loading:
+        # PYSEC-2026-2286, in the weights_only unpickler, and PYSEC-2026-139,
+        # which has no fixed version at all. The loading risk is handled
+        # outside torch: the documented download verifies the release sha256,
+        # and the evaluation scripts and the image default to
+        # ULTRALYTICS_SAFE_LOAD=1, so a checkpoint is not unpickled freely.
         #
         # Listing the IDs rather than disabling the step means a NEW advisory,
         # in torch or anything else, still fails the build. An audit that is
-        # allowed to fail is one nobody reads.
+        # allowed to fail is one nobody reads. The IDs were reviewed against
+        # torch 2.6.0 and are global once listed, so a changed pin fails first
+        # rather than carrying them over unreviewed.
         run: |
+          grep -qx 'torch==2.6.0' requirements.txt \
+            || { echo "torch pin changed: re-review the --ignore-vuln list"; exit 1; }
           pip-audit -r requirements.txt --strict \
             --ignore-vuln PYSEC-2025-191 --ignore-vuln PYSEC-2025-194 \
             --ignore-vuln PYSEC-2025-198 --ignore-vuln PYSEC-2025-199 \
@@ -111,15 +129,37 @@ jobs:
       # `docker run <image>` with no mounts must fail for a stated reason, not
       # an ImportError. The default command needs /weights, and saying so is the
       # difference between a usable image and a puzzle.
+      #
+      # Exact, because the old check - non-zero exit and any of "weights",
+      # "not found" or "No such file" - also passed a libGL ImportError ("No
+      # such file or directory") and a CMD that had lost --weights ("required:
+      # --weights").
       - name: Default command reports what it needs
         run: |
           set +e
           out=$(docker run --rm aerial-detection 2>&1); code=$?
           set -e
           echo "$out" | tail -5
-          test $code -ne 0 || { echo "expected a non-zero exit without /weights"; exit 1; }
-          echo "$out" | grep -qiE "weights|not found|No such file" \
-            || { echo "the failure did not mention the missing weights"; exit 1; }
+          test $code -eq 2 || { echo "expected argparse's exit 2, got $code"; exit 1; }
+          echo "$out" | grep -qF -- "--weights /weights/best.pt not found" \
+            || { echo "the failure did not name the missing weights"; exit 1; }
+          ! echo "$out" | grep -q Traceback || { echo "it failed with a traceback"; exit 1; }
+
+      # onnxruntime-gpu's CUDA provider links cuDNN's sub-libraries directly and
+      # has no RPATH; in this base image they are only under torch's
+      # nvidia/*/lib, which the Dockerfile puts on LD_LIBRARY_PATH. Without that
+      # the provider fails to load and ORT falls back to the CPU. Resolving the
+      # libraries needs no GPU, so it can be checked here.
+      - name: The CUDA provider's libraries resolve
+        run: |
+          docker run --rm aerial-detection -c "
+          import pathlib, subprocess, onnxruntime
+          lib = pathlib.Path(onnxruntime.__file__).parent / 'capi' / 'libonnxruntime_providers_cuda.so'
+          out = subprocess.run(['ldd', str(lib)], capture_output=True, text=True, check=True).stdout
+          missing = [line.strip() for line in out.splitlines() if 'not found' in line]
+          assert not missing, 'unresolved: ' + '; '.join(missing)
+          print('  every library', lib.name, 'links against resolves')
+          "
 
       # The declared /data volume must actually be used. It was declared and
       # never passed, so --data fell back to the bundled VisDrone.yaml, whose
@@ -154,13 +194,14 @@ jobs:
           test "$(ls ro-weights)" = "best.pt" || { echo "the weights mount was written to"; exit 1; }
 
       # Every script must still answer --help inside the image, with no mounts
-      # and no GPU. This is the containerised half of test_cli.py.
+      # and no GPU. This is the containerised half of test_cli.py. The list is
+      # the directory rather than typed out, which had left make_demo_gif out.
       - name: --help works inside the image
         run: |
-          for s in train evaluate benchmark track make_demo_clip; do
-            docker run --rm aerial-detection "src/$s.py" --help > /dev/null \
-              || { echo "src/$s.py --help failed inside the image"; exit 1; }
-            echo "  src/$s.py OK"
+          for path in src/*.py; do
+            docker run --rm aerial-detection "$path" --help > /dev/null \
+              || { echo "$path --help failed inside the image"; exit 1; }
+            echo "  $path OK"
           done
 
       # The image is documented as runnable without root, and nothing here had
@@ -170,16 +211,37 @@ jobs:
       # This is also why there is no `USER` line to test: a hardcoded UID fails
       # on any mount it does not own, and Docker creates named volumes
       # root-owned. Passing --user is the only form that survives both.
+      #
+      # Writing /out was never the whole story: the default command's first
+      # .val() makes a directory under ./runs, and /workspace was root-owned,
+      # so it died with PermissionError while this step still passed. The
+      # second half creates the save directory ultralytics resolves by default,
+      # as that user.
       - name: The image runs as a non-root user
         run: |
-          mkdir -p nonroot-out && chmod 777 nonroot-out
+          mkdir -p nonroot-out && sudo chown 12345:12345 nonroot-out
           docker run --rm --user 12345:12345 -v "$PWD/nonroot-out:/out" \
             --entrypoint python aerial-detection -c "
           import os, pathlib, ultralytics
+          from ultralytics.cfg import get_cfg, get_save_dir
           assert os.getuid() == 12345, os.getuid()
           pathlib.Path('/out/probe').write_text('written by a non-root user')
+          d = get_save_dir(get_cfg(overrides={'mode': 'val', 'task': 'detect'}))
+          d.mkdir(parents=True, exist_ok=True)
           print('  ultralytics', ultralytics.__version__, 'imported as', os.getuid())
+          print('  default val directory is writable:', d.resolve())
           print('  YOLO_CONFIG_DIR =', os.environ['YOLO_CONFIG_DIR'])
           "
           test -f nonroot-out/probe || { echo "the non-root user could not write /out"; exit 1; }
           echo "  /out is writable by the mount's owner"
+
+      # The image is what ships, and it keeps packages the base image brought
+      # that `pip-audit -r requirements.txt` above never sees. Reported, not yet
+      # enforced: the base image's conda packages have not been triaged, and
+      # an audit that fails on day one for reasons nobody has reviewed gets
+      # switched off. Make it strict once its first report has been read.
+      - name: Audit the image (report only)
+        continue-on-error: true
+        run: |
+          docker run --rm --entrypoint sh aerial-detection -c \
+            'pip install -q pip-audit && pip-audit'

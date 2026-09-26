@@ -29,8 +29,19 @@ import math
 import os
 import shutil
 import statistics
+import tempfile
 import time
 from pathlib import Path
+
+# Both are read when ultralytics is imported, so they are set here, before
+# anything can import it. setdefault, so either can still be overridden.
+# YOLO_AUTOINSTALL: ultralytics pip-installs what it thinks is missing at run
+# time, and an ONNX model on the CPU makes it install an unpinned `onnxruntime`
+# over the pinned onnxruntime-gpu build - permanently, for every later run.
+# ULTRALYTICS_SAFE_LOAD: load checkpoints with torch's weights_only unpickler;
+# ultralytics' default is full pickle, which runs a tampered .pt's code.
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
+os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 
 # numpy/torch/ultralytics are imported inside the functions that use them,
 # after parse_args(). At module scope they pin `--help` to a fully provisioned
@@ -302,6 +313,10 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
 
     opts = ort.SessionOptions()
     opts.enable_profiling = True
+    # The profile otherwise lands in the working directory, which is not
+    # writable for a `docker run --user` - where it failed as a puzzling
+    # FileNotFoundError after the session had already run.
+    opts.profile_file_prefix = os.path.join(tempfile.gettempdir(), "ort_profile")
     _register_cudnn()
     sess = ort.InferenceSession(
         str(onnx_path), opts, providers=["CUDAExecutionProvider"]
@@ -343,6 +358,24 @@ def onnx_cuda_runnable(cuda_device: bool, providers: list[str]) -> bool:
     Pure, so it is testable without torch or onnxruntime installed.
     """
     return cuda_device and "CUDAExecutionProvider" in providers
+
+
+def check_ort_build(cuda_device: bool, providers: list[str]) -> None:
+    """Refuse a GPU machine whose onnxruntime cannot use the GPU.
+
+    requirements.txt pins onnxruntime-gpu. A CPU build in its place - which is
+    what Ultralytics' auto-installer put there, over the top of it, the first
+    time an ONNX model ran on the CPU - makes onnx_cuda_runnable() skip the
+    CUDA rows, and the report was written without them: a GPU benchmark with
+    no GPU ONNX numbers, and nothing but environment.providers to say why.
+    """
+    if cuda_device and "CUDAExecutionProvider" not in providers:
+        raise SystemExit(
+            f"A CUDA device is present, but onnxruntime offers only {providers}. "
+            f"The pinned onnxruntime-gpu build has been replaced or shadowed "
+            f"(pip list | grep onnxruntime); reinstall onnxruntime-gpu==1.20.2 "
+            f"rather than publish a report with no ONNX CUDA rows."
+        )
 
 
 def check_placement(placement: dict, allow_cpu_fallback: bool = False) -> None:
@@ -422,57 +455,49 @@ def _sha256(path: Path) -> str:
 def export_onnx(
     weights: Path, onnx_path: Path, imgsz: int, exporter=None, half: bool = False
 ) -> None:
-    """Export `weights` to `onnx_path`, writing nothing into the weights dir.
+    """Export `weights` to `onnx_path`, touching nothing else on disk.
 
     Ultralytics writes the .onnx next to the .pt it loaded - verified: exporting
     a checkpoint from a temp directory put probe.onnx in that same directory. So
     exporting straight from a read-only mount fails even when the final
     destination is writable, which is what `docker run -v ...:/weights:ro` does
-    on the very first run, when no cached graph exists yet. The checkpoint is
-    copied into the destination directory and exported from there instead.
+    on the very first run, when no cached graph exists yet.
+
+    The checkpoint is copied into a private temporary directory beside the
+    destination and exported from there. It used to be staged in the
+    destination directory itself - the weights directory, by default - where
+    ultralytics then wrote <stem>.onnx: an existing best.onnx, which is what
+    `yolo export` produces, was overwritten and then renamed away, with no
+    message. A directory nothing else uses cannot collide with anything, which
+    also covers a different best.pt already sitting in the cache. Beside the
+    destination rather than in the system temp, so the final replace() stays
+    on one filesystem.
 
     `exporter` is injected so the path can be tested without a GPU, a
     checkpoint, or ultralytics installed at all.
     """
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
-    staged_weights = onnx_path.parent / weights.name
-    copied = not staged_weights.exists() or not staged_weights.samefile(weights)
-    if copied and staged_weights.exists():
-        # Something else already lives at the staging path - same basename,
-        # different file. Do NOT copy over it: the `finally` below deletes this
-        # path, so the sequence would be "overwrite a stranger's file, then
-        # remove it". `best.pt` is ultralytics' default output name and is
-        # gitignored here, so the stranger is very often another checkpoint
-        # that only exists on disk.
-        raise FileExistsError(
-            f"{staged_weights} already exists and is not {weights}. The export "
-            f"stages the checkpoint there and deletes it afterwards, which "
-            f"would destroy that file. Point --cache-dir somewhere else."
-        )
-    if copied:
+    if exporter is None:  # pragma: no cover - exercised by the real run
+        from ultralytics import YOLO
+
+        def exporter(src: Path) -> str:
+            return YOLO(str(src)).export(
+                format="onnx",
+                imgsz=imgsz,
+                opset=ONNX_OPSET,
+                simplify=ONNX_SIMPLIFY,
+                dynamic=ONNX_DYNAMIC,
+                half=half,
+            )
+
+    with tempfile.TemporaryDirectory(dir=onnx_path.parent, prefix=".export-") as tmp:
+        staged_weights = Path(tmp) / weights.name
         shutil.copy2(weights, staged_weights)
-    try:
-        if exporter is None:  # pragma: no cover - exercised by the real run
-            from ultralytics import YOLO
-
-            def exporter(src: Path) -> str:
-                return YOLO(str(src)).export(
-                    format="onnx",
-                    imgsz=imgsz,
-                    opset=ONNX_OPSET,
-                    simplify=ONNX_SIMPLIFY,
-                    dynamic=ONNX_DYNAMIC,
-                    half=half,
-                )
-
         produced = Path(exporter(staged_weights))
         # .replace, not .rename: rename refuses an existing target on Windows,
         # and a digest mismatch forcing a re-export is exactly the case where
         # the stale graph has to be overwritten.
         produced.replace(onnx_path)
-    finally:
-        if copied:
-            staged_weights.unlink(missing_ok=True)
 
 
 def _MANIFEST_STAMP(onnx_path: Path) -> Path:
@@ -567,12 +592,27 @@ def run_one(
     """
     map_tolerance = _map_tolerance(map_tolerance)
 
+    import onnxruntime as ort
     import torch
     from ultralytics import YOLO
 
+    # Before either .val(): finding this after them costs minutes of GPU time.
+    check_ort_build(torch.cuda.is_available(), ort.get_available_providers())
+
     # --- accuracy -------------------------------------------------------
+    # Ultralytics otherwise writes each val's plots under ./runs/, and the
+    # working directory is not writable for a `docker run --user`: the default
+    # command died here with PermissionError. Where these go does not touch any
+    # number; in the container they land beside the export cache on /out.
+    val_dir = (cache_dir or Path(tempfile.gettempdir())) / "val-runs"
     metrics = YOLO(str(weights)).val(
-        data=data, imgsz=imgsz, device=device, verbose=False
+        data=data,
+        imgsz=imgsz,
+        device=device,
+        verbose=False,
+        project=str(val_dir),
+        name="pytorch",
+        exist_ok=True,
     )
     pytorch_map50 = _validated_map("PyTorch mAP50", metrics.box.map50)
     pytorch_map95 = _validated_map("PyTorch mAP50-95", metrics.box.map)
@@ -630,7 +670,14 @@ def run_one(
     # is an assumption and not a measurement -- opset choice, constant folding
     # and fp precision can all move it.
     onnx_metrics = YOLO(str(onnx_path), task="detect").val(
-        data=data, imgsz=imgsz, device=device, half=half, verbose=False
+        data=data,
+        imgsz=imgsz,
+        device=device,
+        half=half,
+        verbose=False,
+        project=str(val_dir),
+        name="onnx",
+        exist_ok=True,
     )
     onnx_map50 = _validated_map("ONNX mAP50", onnx_metrics.box.map50)
     onnx_map95 = _validated_map("ONNX mAP50-95", onnx_metrics.box.map)
@@ -663,8 +710,6 @@ def run_one(
             f"model is not a deployment artefact -- investigate before publishing "
             f"latency for it."
         )
-
-    import onnxruntime as ort
 
     onnx_cuda = onnx_cuda_runnable(
         torch.cuda.is_available(), ort.get_available_providers()
@@ -779,6 +824,15 @@ def main() -> None:
         "cannot silently replace the full-precision report.",
     )
     args = p.parse_args()
+    # Before anything else: a missing checkpoint otherwise reaches YOLO(),
+    # which treats an unknown name as a release asset, queries api.github.com,
+    # and ends in a torch.load traceback. In the container, the usual cause is
+    # a forgotten mount, so say which one.
+    if not args.weights.is_file():
+        p.error(
+            f"--weights {args.weights} not found; mount the checkpoint "
+            f'directory, e.g. -v "$PWD/runs/n_1024/weights:/weights:ro"'
+        )
 
     if args.out is None:
         args.out = REPORTS_DIR / (

@@ -36,7 +36,12 @@ Usage
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+
+# Read when ultralytics is imported, so set before anything can import it: no
+# pip installs at run time. See benchmark.py.
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 
 # cv2.CAP_PROP_FPS, spelled out so probe_clip's signature and its tests do not
 # drag OpenCV in. The value is fixed by the OpenCV ABI.
