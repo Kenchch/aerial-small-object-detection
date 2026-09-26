@@ -101,8 +101,9 @@ def resolve_device(
         return text, None
 
     if not cuda_available:
-        # A CUDA index was asked for and there is no CUDA. Ultralytics falls
-        # back to the CPU, and the CPU is what the numbers came off.
+        # Auto ("") with no CUDA: Ultralytics picks the CPU, and the CPU is
+        # what the numbers came off. An explicit CUDA request does not reach
+        # this in a real run - check_device refuses it before the model loads.
         return "cpu", None
 
     if text in ("", "cuda"):  # auto / unindexed
@@ -120,6 +121,26 @@ def resolve_device(
         # run asked for is still worth recording; the card's name is not
         # knowable, and guessing card 0 is how this went wrong before.
         return f"cuda:{index}", None
+
+
+def check_device(requested, cuda_available: bool) -> None:
+    """Refuse a CUDA device on a machine without CUDA, before any work starts.
+
+    Ultralytics does not fall back to the CPU for an explicit CUDA request: its
+    select_device raises ValueError("Invalid CUDA 'device=0' requested") on the
+    first frame. --device defaults to '0', so on a machine with no GPU the
+    documented command died with a traceback after the clip had been opened.
+    Named here, with the flag that fixes it.
+
+    Pure, so it is testable without torch or a GPU.
+    """
+    text = "" if requested is None else str(requested).strip().lower()
+    if cuda_available or text in ("", "cpu", "mps", "mps:0"):
+        return
+    raise SystemExit(
+        f"--device {requested} asks for CUDA, and no CUDA device is available "
+        f"here. Pass --device cpu to run on the CPU."
+    )
 
 
 def _environment(device: str) -> dict:
@@ -973,6 +994,10 @@ def main() -> None:
     source_matches = check_source_matches_record(
         args.source, args.allow_source_mismatch
     )
+
+    import torch
+
+    check_device(args.device, torch.cuda.is_available())
 
     from ultralytics import YOLO
 

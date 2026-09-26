@@ -202,10 +202,28 @@ def test_the_default_device_resolves_to_the_first_card():
 
 
 def test_a_cuda_request_with_no_cuda_records_the_cpu_that_actually_ran():
-    """Ultralytics falls back to the CPU, and the CPU is where the numbers came
-    from, so that is what the report has to say."""
+    """With no CUDA, whatever ran, ran on the CPU, so that is what the report
+    has to say. (An explicit index never gets this far in a real run:
+    check_device stops it first - see the tests below.)"""
     assert track.resolve_device("0", False, _names) == ("cpu", None)
     assert track.resolve_device("cpu", False, _names) == ("cpu", None)
+
+
+@pytest.mark.parametrize("requested", ["0", "1", "0,1", "cuda", "cuda:0"])
+def test_a_cuda_request_with_no_cuda_is_refused_with_the_fix(requested):
+    """Ultralytics raises ValueError for these rather than falling back, on the
+    first frame. The refusal names the flag that works instead."""
+    with pytest.raises(SystemExit, match="--device cpu"):
+        track.check_device(requested, cuda_available=False)
+
+
+@pytest.mark.parametrize("requested", ["cpu", "CPU", "mps", "", None])
+def test_non_cuda_devices_pass_without_cuda(requested):
+    track.check_device(requested, cuda_available=False)
+
+
+def test_a_cuda_request_passes_when_cuda_is_there():
+    track.check_device("0", cuda_available=True)
 
 
 def test_a_card_that_cannot_be_named_is_not_guessed_at():
@@ -457,9 +475,38 @@ def _run(monkeypatch, tmp_path, **kw):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["track.py", "--weights", "w.pt", "--source", str(source), "--out", str(out)],
+        [
+            "track.py",
+            "--weights",
+            "w.pt",
+            "--source",
+            str(source),
+            "--out",
+            str(out),
+            # The stubbed torch has no CUDA, and the default '0' is refused.
+            "--device",
+            "cpu",
+        ],
     )
     return source, out, made
+
+
+def test_the_default_device_without_cuda_stops_before_the_model_loads(
+    tmp_path, monkeypatch
+):
+    """The documented command, on a machine with no GPU."""
+    import sys
+
+    _run(monkeypatch, tmp_path, frames_in=3, frames_back=3)
+    sys.argv = [a for a in sys.argv if a not in ("--device", "cpu")]
+    loaded = []
+    sys.modules["ultralytics"].YOLO = lambda *a, **k: loaded.append(a)
+
+    with pytest.raises(SystemExit, match="--device cpu"):
+        track.main()
+
+    assert not loaded, "the model was loaded before the device was checked"
+    assert not (tmp_path / "track_out.tmp.mp4").exists()
 
 
 def test_a_source_with_no_frames_leaves_no_staged_output(tmp_path, monkeypatch):

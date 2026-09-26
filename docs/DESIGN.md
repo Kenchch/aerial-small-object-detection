@@ -238,12 +238,13 @@ raw PyTorch model across backends.
 ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
 by construction; timing that against a GPU-resident PyTorch forward — which is
 what this table used to do — charges ONNX ~2.2 ms of copying PyTorch never
-paid, and reported the export as **2 % faster when like-for-like it is 21 %**.
-On CPU there is no copy to separate, so the two columns coincide.
+paid, and reported the export as **1 % slower when like-for-like it is 17 %
+faster**. On CPU there is no copy to separate, so the two columns coincide.
 
-ONNX is 21 % faster core-to-core and 21 % transfer-to-transfer. The more
-decisive number is still CPU: **11.1× slower** than ONNX on GPU — the case for
-keeping inference on a GPU-equipped edge device rather than falling back to CPU.
+ONNX is 17 % faster core-to-core and 17 % transfer-to-transfer. The more
+decisive number is still CPU: **9.8× slower** than ONNX on GPU, both
+host-in/host-out (11.9× against the GPU's core figure) — the case for keeping
+inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
 before each stop — GPU work is asynchronous, so timing without it measures

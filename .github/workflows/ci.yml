@@ -46,12 +46,11 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # PyYAML is here to read .github/dependabot.yml, not to run the
-          # project: test_dependabot_config.py checks that the ignore list
-          # names packages requirements.txt actually pins. It is a project
-          # dependency already, so this adds nothing the bare clone would not
-          # have anyway.
-          pip install pytest ruff pip-audit numpy PyYAML
+          # From requirements-dev.txt, the file the README tells a reader to
+          # install, rather than a list typed out here. The hand-written list
+          # carried PyYAML while requirements-dev.txt did not, so `pytest` on a
+          # clean install stopped at collection and CI could not see it.
+          pip install -r requirements-dev.txt pip-audit
 
       - name: Lint
         run: ruff check .

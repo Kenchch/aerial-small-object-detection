@@ -166,8 +166,8 @@ def bench_pytorch(weights: Path, imgsz: int, device: str = "cuda") -> dict:
     way to draw a wrong conclusion here. ONNX Runtime's `sess.run` takes a
     numpy array and returns numpy arrays, so it is transfer-inclusive by
     construction; timing that against a GPU-resident PyTorch forward charges
-    ONNX for ~2 ms of copying that PyTorch never does, and understates the
-    export's real advantage roughly threefold.
+    ONNX for ~2 ms of copying that PyTorch never does -- on the committed
+    report, enough to turn a like-for-like speedup into an apparent slowdown.
     """
     import torch
     from ultralytics import YOLO
@@ -326,6 +326,23 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
         "cpu_fallback_nodes": counts.get("CPUExecutionProvider", 0),
         "all_on_cuda": total > 0 and counts.get("CPUExecutionProvider", 0) == 0,
     }
+
+
+def onnx_cuda_runnable(cuda_device: bool, providers: list[str]) -> bool:
+    """Should the ONNX-CUDA rows run, or be skipped like the PyTorch one?
+
+    `ort.get_available_providers()` says which providers the wheel was BUILT
+    with, not whether a GPU is present. The pinned onnxruntime-gpu lists
+    CUDAExecutionProvider on a machine with no GPU at all, and on a
+    `docker run` without `--gpus`, so gating on it alone asked for CUDA there,
+    got the CPU, and bench_onnx refused the result - after both .val() passes
+    had run, and before the ONNX-CPU row or the report was written. The
+    --device help promises these rows are skipped, not forced; this is the
+    check that makes it so.
+
+    Pure, so it is testable without torch or onnxruntime installed.
+    """
+    return cuda_device and "CUDAExecutionProvider" in providers
 
 
 def check_placement(placement: dict, allow_cpu_fallback: bool = False) -> None:
@@ -649,14 +666,18 @@ def run_one(
 
     import onnxruntime as ort
 
-    available = ort.get_available_providers()
-    if "CUDAExecutionProvider" in available:
+    onnx_cuda = onnx_cuda_runnable(
+        torch.cuda.is_available(), ort.get_available_providers()
+    )
+    if onnx_cuda:
         row["onnx_cuda"] = bench_onnx(onnx_path, imgsz, "CUDAExecutionProvider")
         placement = verify_cuda_placement(onnx_path, imgsz)
         row["onnx_cuda_placement"] = placement
         print(f"  ONNX node placement: {placement}")
         print(f"  ONNXRuntime GPU: {row['onnx_cuda']}")
         check_placement(placement, allow_cpu_fallback)
+    else:
+        print("  ONNXRuntime GPU: skipped (no CUDA device, or CPU-only onnxruntime)")
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
     print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
 
@@ -671,7 +692,7 @@ def run_one(
     # after. Both numbers then come from one session and the ratio between them
     # means something. The export is cached, so this costs a benchmark loop and
     # not a re-export.
-    if half and "CUDAExecutionProvider" in available:
+    if half and onnx_cuda:
         fp32_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}.onnx"
         if not _export_is_current(fp32_path, weights, imgsz, half=False):
             export_onnx(weights, fp32_path, imgsz, half=False)

@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from benchmark import TIMED_ITERS, _summarise
+from benchmark import TIMED_ITERS, _summarise, onnx_cuda_runnable
 
 
 def test_summarise_basic_stats():
@@ -44,3 +44,26 @@ def test_p95_never_understates_the_tail(n):
     expected = float(math.ceil(0.95 * n))  # nearest-rank value
     assert _summarise(times)["p95_ms"] == expected
     assert expected >= float(int(0.95 * n))  # never below the old one
+
+
+# The provider list onnxruntime-gpu 1.20.2 reports on a machine with no GPU.
+GPU_WHEEL = [
+    "TensorrtExecutionProvider",
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider",
+]
+
+
+@pytest.mark.parametrize(
+    ("cuda_device", "providers", "expected"),
+    [
+        (True, GPU_WHEEL, True),
+        # The GPU wheel with no device: the case that used to request CUDA,
+        # get the CPU, and raise before the ONNX-CPU row or report existed.
+        (False, GPU_WHEEL, False),
+        (True, ["CPUExecutionProvider"], False),  # CPU-only onnxruntime wheel
+        (False, ["CPUExecutionProvider"], False),
+    ],
+)
+def test_onnx_cuda_rows_need_a_device_and_a_provider(cuda_device, providers, expected):
+    assert onnx_cuda_runnable(cuda_device, providers) is expected

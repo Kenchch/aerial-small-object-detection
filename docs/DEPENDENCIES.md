@@ -33,8 +33,9 @@ Writing the ignore against a version number meant re-asking the same question
 under each release, and the four were closed unmerged.
 
 The ignores are now per dependency, covering the whole measured runtime —
-torch, torchvision, ultralytics, onnx, onnxslim, onnxruntime-gpu, opencv-python
-and numpy. Pillow and PyYAML stay upgradable: they read image headers and parse
+torch, torchvision, ultralytics, onnx, onnxslim, onnxruntime-gpu, lap,
+opencv-python and numpy. lap is ByteTrack's assignment solver, so the tracking
+figures were measured on it. Pillow and PyYAML stay upgradable: they read image headers and parse
 dataset specs, and cannot move a published number. `tests/test_dependabot_config.py`
 holds the two lists against `requirements.txt`, because a `dependency-name` that
 matches nothing is not an error — it is a config that reviews as correct and has
