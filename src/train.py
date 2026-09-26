@@ -1,14 +1,17 @@
 """
 Train a YOLO detector on VisDrone2019 (drone-captured aerial imagery).
 
-Aerial frames are large (~2000x1500) and the objects in them are tiny -- most
-VisDrone boxes are under 20px on a side (see evaluate.py's label-size report).
-That is why this trains at 1024px rather than the YOLO default of 640: at 640,
+VisDrone frames run from 960x540 to 2000x1500 (val is mostly 1360x765) and the
+objects in them are tiny: at the network input the median box is ~11 px on a
+side at 640 and ~18 px at 1024 (reports/evaluation.json, label_scale). That is
+why this trains at 1024px rather than the YOLO default of 640: at 640,
 downscaling throws away most of the signal a small object has left.
 
 Usage
 -----
-    python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --name n_1024
+    python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --name n_1024_rerun
+
+(runs/n_1024 is the published run, and the script refuses to write into it.)
 """
 
 import argparse
@@ -109,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Default 15. Early-stop patience on fitness. Untested at 1024px: "
         "the recorded run never triggered this and was still "
-        "improving at epoch 50 (see README, 'What this does "
+        "improving at epoch 50 (see docs/DESIGN.md, 'What this does "
         "not establish'), so 50 epochs is a budget here, not "
         "a verified plateau.",
     )
@@ -128,11 +131,11 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Allow an existing runs/<name>/ to be written into. Off by "
-        "default: the README documents `--name n_1024`, which is "
-        "also the run whose results.csv, plots and metrics this "
-        "repo publishes, so running the documented command a "
-        "second time silently overwrote the evidence behind every "
-        "number in the README. Use a new --name, or pass this "
+        "default: runs/n_1024 is the run whose results.csv, plots "
+        "and metrics this repo publishes, so running the training "
+        "command under that name a second time silently overwrote "
+        "the evidence behind every published number. Use a new "
+        "--name, or pass this "
         "flag deliberately.",
     )
     return p.parse_args()
@@ -265,10 +268,10 @@ def main() -> None:
         # Ultralytics' defaults (fliplr=0.5, scale=0.5, mosaic=1.0,
         # close_mosaic=10) are already sensible for this dataset and are left
         # alone -- checked against cfg/default.yaml rather than assumed. The
-        # one real change: flipud defaults to 0.0 (label-ruining for a normal,
-        # ground-level photo) but VisDrone is shot nadir, straight down, so
-        # there is no canonical "up" and a vertical flip is label-preserving
-        # here.
+        # one change: flipud, whose default is 0.0. It was set on the premise
+        # that VisDrone is shot nadir with no canonical "up"; most frames are
+        # in fact oblique, some with sky in them, and no 0.0-vs-0.5 ablation
+        # has been run. It stays because the published run used it.
         flipud=0.5,
         plots=True,
         val=True,

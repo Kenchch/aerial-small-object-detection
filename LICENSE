@@ -1,3 +1,10 @@
+Scope: this MIT licence covers src/, tests/, scripts/, docker/, the
+Dockerfile and docs/. It does not cover:
+  - model weights, which are AGPL-3.0 (see LICENSES/AGPL-3.0.txt and NOTICE);
+  - reports/tracking_demo.gif and other media derived from VisDrone2019
+    frames, for which no licence is granted: research demonstration only
+    (see NOTICE).
+
 MIT License
 
 Copyright (c) 2026 Feng Jiang

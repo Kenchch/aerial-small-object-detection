@@ -17,6 +17,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 REPORTS = ("evaluation.json", "evaluation_test.json")
+# --split train reads labels only, so its report has no checkpoint to describe.
+# It was once outside every check here, and was a file no current code could
+# have written: no provenance at all, and no trailing newline.
+LABEL_ONLY = ("evaluation_train.json",)
 
 REQUIRED = {
     "run_date",
@@ -32,6 +36,14 @@ REQUIRED = {
     "selection",
     "data_root_overridden",
 }
+LABEL_ONLY_REQUIRED = {
+    "run_date",
+    "split",
+    "data",
+    "imgsz",
+    "ultralytics",
+    "data_root_overridden",
+}
 
 
 def _report(name: str) -> dict:
@@ -44,6 +56,19 @@ def test_every_evaluation_records_its_provenance(name):
     assert provenance, f"{name} has no provenance block"
     missing = REQUIRED - set(provenance)
     assert not missing, f"{name} is missing {sorted(missing)}"
+
+
+@pytest.mark.parametrize("name", LABEL_ONLY)
+def test_the_label_only_report_records_its_provenance(name):
+    report = _report(name)
+    provenance = report.get("provenance")
+    assert provenance, f"{name} has no provenance block"
+    assert LABEL_ONLY_REQUIRED <= set(provenance), sorted(
+        LABEL_ONLY_REQUIRED - set(provenance)
+    )
+    assert "checkpoint_sha256" not in provenance, "no checkpoint was used"
+    assert report["config"]["weights"] is None
+    assert (ROOT / "reports" / name).read_bytes().endswith(b"\n")
 
 
 @pytest.mark.parametrize("name", REPORTS)
@@ -108,7 +133,7 @@ def test_the_docker_tracking_example_writes_to_the_mounted_output():
     assert "--out /out/" in command
 
 
-@pytest.mark.parametrize("name", REPORTS)
+@pytest.mark.parametrize("name", REPORTS + LABEL_ONLY)
 def test_no_machine_specific_path_reached_a_committed_report(name):
     """`_portable` exists for this. An absolute path from whichever machine last
     ran the evaluation says nothing to a reader and quietly publishes a
@@ -120,7 +145,7 @@ def test_no_machine_specific_path_reached_a_committed_report(name):
         assert marker not in text, f"{name} contains {marker!r}"
 
 
-@pytest.mark.parametrize("name", REPORTS)
+@pytest.mark.parametrize("name", REPORTS + LABEL_ONLY)
 def test_the_data_spec_named_is_one_the_repository_carries(name):
     """The point of --data-root: the report names the committed spec and records
     the override as a field, rather than a path or a parenthetical apology."""
@@ -130,3 +155,96 @@ def test_the_data_spec_named_is_one_the_repository_carries(name):
         f"{provenance['data']}"
     )
     assert isinstance(provenance["data_root_overridden"], bool)
+
+
+# --- _provenance itself, without a GPU ------------------------------------- #
+
+
+def _stub_torch(monkeypatch, cuda: bool):
+    import sys
+    import types
+
+    torch = types.ModuleType("torch")
+    torch.__version__ = "0.0-stub"
+    torch.version = types.SimpleNamespace(cuda="12.4")
+    torch.cuda = types.SimpleNamespace(
+        is_available=lambda: cuda, get_device_name=lambda i: f"card {i}"
+    )
+    ultralytics = types.ModuleType("ultralytics")
+    ultralytics.__version__ = "0.0-stub"
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "ultralytics", ultralytics)
+
+
+def test_another_checkpoint_gets_no_release_or_selection_claim(tmp_path, monkeypatch):
+    """The selection note was written for every checkpoint, so evaluating any
+    other one produced a report asserting the v1.0 selection history."""
+    import evaluate
+
+    _stub_torch(monkeypatch, cuda=True)
+    weights = tmp_path / "other.pt"
+    weights.write_bytes(b"some other checkpoint")
+
+    provenance = evaluate._provenance(
+        weights, "docker/VisDrone.yaml", 1024, "0", "val", None
+    )
+
+    assert provenance["selection"] is None
+    assert "checkpoint_release" not in provenance
+
+
+def test_the_release_checkpoint_keeps_its_selection_note(tmp_path, monkeypatch):
+    import hashlib
+
+    import evaluate
+
+    _stub_torch(monkeypatch, cuda=True)
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"pretend release")
+    digest = hashlib.sha256(b"pretend release").hexdigest()
+    monkeypatch.setattr(evaluate, "RELEASE_SHA256", digest)
+
+    provenance = evaluate._provenance(
+        weights, "docker/VisDrone.yaml", 1024, "0", "val", None
+    )
+
+    assert provenance["selection"] == evaluate.SELECTION_NOTE
+    assert provenance["checkpoint_release_tag"] == evaluate.RELEASE_TAG
+
+
+@pytest.mark.parametrize(
+    ("device", "cuda", "gpu"),
+    [("cpu", None, None), ("1", "12.4", "card 1"), ("cuda:1", "12.4", "card 1")],
+)
+def test_the_device_recorded_is_the_one_that_ran(
+    tmp_path, monkeypatch, device, cuda, gpu
+):
+    """torch.version.cuda is the build, not the run, and card 0 was named
+    whatever --device said."""
+    import evaluate
+
+    _stub_torch(monkeypatch, cuda=True)
+    weights = tmp_path / "w.pt"
+    weights.write_bytes(b"w")
+
+    provenance = evaluate._provenance(
+        weights, "docker/VisDrone.yaml", 1024, device, "val", None
+    )
+
+    assert (provenance["cuda"], provenance["gpu"]) == (cuda, gpu)
+
+
+def test_label_only_provenance_needs_no_torch(monkeypatch):
+    import sys
+
+    import evaluate
+
+    _stub_torch(monkeypatch, cuda=False)
+    monkeypatch.setitem(sys.modules, "torch", None)  # importing it now raises
+
+    provenance = evaluate._provenance(
+        None, "docker/VisDrone.yaml", 1024, "0", "train", "x"
+    )
+
+    assert set(provenance) == LABEL_ONLY_REQUIRED
+    assert provenance["data_root_overridden"] is True

@@ -66,7 +66,7 @@ read of the label files: `car` 144,866 vs 144,867, `pedestrian` 79,335 vs
 79,337, `motor` 29,646 vs 29,647. The other seven classes match exactly, so
 the bars sum to 343,201 against a direct total of 343,205. The gap is four
 boxes confined to the three largest classes, not a per-class offset. Counts
-quoted elsewhere in this README are the direct ones (`class_balance` in
+quoted elsewhere in this document are the direct ones (`class_balance` in
 `reports/evaluation_train.json`), so adding up the bars will not quite
 reproduce them.
 
@@ -151,13 +151,14 @@ frequency.** Training signal has to be counted on the train split, not the val
 shares above: there `pedestrian` has 79,337 boxes to `bus`'s 5,926, so 13×
 more — and `bus` is not even the rarest training class, `awning-tricycle`
 (3,246) is. Those counts are in `reports/evaluation_train.json`
-(`python src/evaluate.py --split train`), so they can be checked without
-downloading the dataset. `bus` still scores nearly double `pedestrian` on
+(`python src/evaluate.py --split train --data docker/VisDrone.yaml
+--data-root "$DATASETS/VisDrone"`, which reads labels only and needs no
+checkpoint), so they can be checked without downloading the dataset. `bus` still scores nearly double `pedestrian` on
 mAP50-95 (0.374 vs 0.198). What separates them is apparent size: a bus occupies
 tens of pixels from altitude, a pedestrian occupies a handful, and the
 label-scale table above is exactly where that prediction came from.
 
-The confusion matrix below isolates this. At the deployed threshold
+The `error_split` table below isolates this. At the deployed threshold
 `pedestrian` and `bus` are recognised about equally well (0.42 of true
 instances correct against 0.44) and `pedestrian` still scores half the
 mAP50-95. Since mAP50-95 averages IoU thresholds from 0.5 to 0.95, a two-pixel
@@ -165,6 +166,11 @@ boundary error on an 11 px box costs what it would not cost on a bus. The gap
 is localisation precision under scale, not recognition.
 
 ![Normalised confusion matrix on the val split](../runs/n_1024/confusion_matrix_normalized.png)
+
+*This figure is the training-time matrix, built at conf = 0.001 - the
+superseded operating point behind the "mostly misclassified" reading
+discussed below - not the conf = 0.25 split the table reports. Its cells
+will not match the table's.*
 
 Columns are the true class and sum to 1, so each column splits three ways:
 correct, missed (the `background` row), and misclassified (everything else).
@@ -179,6 +185,9 @@ Built at **conf = 0.25** — the threshold `src/track.py` deploys at — and
 recorded as `error_split_conf` beside the split itself. That is not the
 operating point of the P/R figures above, which need `conf → 0` or the PR
 curve is truncated, and the two must not be read as one measurement.
+One difference from deployment remains: `.val()` runs NMS with
+`multi_label=True`, while `predict`/`track` use `multi_label=False`. Measured,
+it moves no share by more than 0.008 and changes no conclusion below.
 
 | true class | correct | missed | misclassified | mostly as |
 | --- | --- | --- | --- | --- |
@@ -431,7 +440,7 @@ is the limiting factor again.
 ### CUDA version pinning
 
 The driver on this machine (532.09) supports CUDA up to 12.1, but PyTorch's
-default PyPI wheels are CPU-only and its current CUDA wheels target 12.8,
+default PyPI wheels are CPU-only on Windows and its current CUDA wheels target 12.8,
 which needs a 570+ driver. The cu124 build works via CUDA 12.x minor-version
 compatibility:
 
@@ -467,10 +476,13 @@ Checked Ultralytics' own `cfg/default.yaml` rather than assuming: `fliplr=0.5`,
 `scale=0.5`, `mosaic=1.0` and `close_mosaic=10` are already the defaults, and
 they suit this dataset as-is, so training does not override them. There is
 exactly **one** real deviation: `flipud` defaults to `0.0` (a vertical flip
-would ruin the labels on a normal, ground-level photo), but VisDrone is shot
-nadir — straight down — so there is no canonical "up" and a vertical flip is
-label-preserving here. `flipud=0.5` is set explicitly for that reason; nothing
-else is.
+would ruin the labels on a normal, ground-level photo), and training sets
+`flipud=0.5`. The reason originally given was that VisDrone is shot nadir,
+straight down, with no canonical "up". The data does not bear that out: most
+val sequences are oblique, and several show sky or a horizon. So `flipud=0.5`
+is an untested assumption carried over, not a measured choice - no 0.0 vs 0.5
+ablation has been run - and it stays only because the published run used it.
+Nothing else deviates.
 
 ---
 
@@ -514,7 +526,8 @@ reach, not a converged result.
 conda create -n yolo -c conda-forge --override-channels python=3.11 pip -y
 conda activate yolo
 
-# torch first, from the cu124 index -- PyPI's default wheels are CPU-only.
+# torch first, from the cu124 index -- on Windows PyPI's default wheels are
+# CPU-only. (On Linux x86_64, PyPI's torch==2.6.0 is already the cu124 build.)
 pip install torch==2.6.0 torchvision==0.21.0 \
     --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
@@ -526,7 +539,7 @@ index" inside a requirements file. It installs the same two pins the file
 declares, so the second command finds them already satisfied and moves on.
 
 Both pins are load-bearing: `--index-url .../cu124` avoids the CPU-only wheels
-PyPI serves by default, and `onnxruntime-gpu==1.20.2` avoids a build that
+PyPI serves by default on Windows, and `onnxruntime-gpu==1.20.2` avoids a build that
 expects CUDA 13 and silently degrades to CPU.
 
 Point Ultralytics at a drive with room — VisDrone plus its disk cache needs
@@ -647,8 +660,10 @@ file profiled is the file that record describes.
 python src/train.py --model yolo11n.pt --imgsz 1024 --epochs 50 --batch 6   --name n_1024_rerun
 
 # Per-class metrics + ground-truth object-size distribution
-# -> reports/evaluation.json
-python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024
+# -> reports/evaluation.json. docker/VisDrone.yaml is the spec the committed
+# reports name; --data-root points it at wherever the dataset lives here.
+python src/evaluate.py --weights runs/n_1024/weights/best.pt --imgsz 1024 \
+  --data docker/VisDrone.yaml --data-root "$DATASETS/VisDrone"
 
 # ONNX export + latency across backends (run on an idle GPU)
 python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024
@@ -676,7 +691,7 @@ python src/track.py --weights runs/n_1024/weights/best.pt --source reports/demo_
 The second digest is the one that matters. Without it the sidecar is written
 from whatever clip was just produced, so it always agrees with itself and
 "verified" means nothing. With it, a clip that comes out different is refused,
-and the published `demo_pan.mp4` and its provenance are left untouched.
+and the existing `demo_pan.mp4` and its provenance are left untouched.
 
 The record carries **two** frame digests, because they answer different
 questions and neither answers both:
@@ -686,8 +701,10 @@ questions and neither answers both:
 | `decoded_frames_sha256` | frames read back **out of the finished file** | a remux — different container bytes, same pixels | `--expected-decoded-frames-sha256` |
 | `pre_encode_frames_sha256` | frames handed **to the encoder** | a change of codec — the generator made the same pixels | `--expected-pre-encode-frames-sha256` |
 
-The decoded one is the only digest a consumer can recompute from the published
-clip alone, without the source frame or the generator. Reading the file back is
+The decoded one is the only digest a consumer can recompute from the clip
+alone, without the source frame or the generator. The clip itself is not
+distributed - it is gitignored and not a release asset, since it is VisDrone
+media - so checking it means rebuilding it locally with the command above. Reading the file back is
 also what catches an encoder that accepts ninety frames and writes eighty-seven
 — a `VideoWriter` reports nothing when it does — so the frame count and
 dimensions in the record are measured from the file rather than assumed from
@@ -707,7 +724,7 @@ src/evaluate.py         per-class metrics; label-size distribution
 src/benchmark.py        ONNX export (FP32 or --half); latency on PyTorch / ONNX Runtime GPU / CPU
 src/track.py            video inference + ByteTrack; staged latency profile
 src/make_demo_clip.py   synthetic-motion clip for the tracking demo
-src/make_demo_gif.py    README GIF from track_out.mp4, with its digest
+src/make_demo_gif.py    demo GIF from track_out.mp4, with its digest
 tests/                  unit tests; run with `pytest`
 scripts/resume.sh       restart an interrupted run: bash scripts/resume.sh [run_name] [flags]
 runs/                   training artefacts (weights gitignored)
@@ -771,11 +788,19 @@ reports/demo_pan.mp4` regenerates the underlying video.
 
 ## Licence and attribution
 
-Code in `src/` and `tests/` is available under the repository's MIT licence.
+The repository's MIT licence covers `src/`, `tests/`, `scripts/`, `docker/`,
+the `Dockerfile` and `docs/`; `LICENSE` says so, and what it excludes.
 The pipeline depends on Ultralytics, which is distributed under AGPL-3.0;
 running or distributing the combined work must comply with that licence. The
-published `best.pt` model and its ONNX export were fine-tuned from
-Ultralytics' `yolo11n.pt` and are offered under AGPL-3.0, not MIT.
+published `best.pt` model, and any ONNX export of it (none is distributed
+here), were fine-tuned from Ultralytics' `yolo11n.pt` and are offered under
+AGPL-3.0, not MIT; the licence text is in `LICENSES/AGPL-3.0.txt`.
+
+The v1.0 `best.pt` also carries the training machine's paths in its metadata
+- `train_args.project`, `train_args.data` and `git.root` - and an ONNX export
+of it repeats the data path in its description. They are left in place:
+rewriting the released file would change the digest every committed report
+and check is tied to. A future release should clear them before upload.
 
 VisDrone2019 is copyright the AISKYEYE team at Tianjin University. Its official
 repository does not publish an explicit dataset licence, so this repository

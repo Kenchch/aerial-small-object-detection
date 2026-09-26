@@ -1,7 +1,7 @@
 # NOTE: gitignore has no inline comments -- '#' only starts a comment at the
 # beginning of a line. Keep every comment on its own line.
 
-# Datasets are downloaded by Ultralytics on first run (see README).
+# Datasets are downloaded by Ultralytics on first run (see docs/DESIGN.md#setup).
 datasets/
 *.cache
 
