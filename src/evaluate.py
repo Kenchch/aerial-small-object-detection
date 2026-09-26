@@ -20,8 +20,16 @@ Usage
 
 import argparse
 import json
+import os
+import tempfile
 from collections import Counter
 from pathlib import Path
+
+# Read when ultralytics is imported, so set before anything can import it.
+# No run-time pip installs, and checkpoints loaded with torch's weights_only
+# unpickler rather than full pickle. See benchmark.py for why each matters.
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
+os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 
 # numpy/PIL/yaml/ultralytics are imported inside the functions that use them,
 # after parse_args(). At module scope they pull in torch and pin `--help` to a
@@ -106,7 +114,20 @@ def per_class_table(
     from ultralytics import YOLO
 
     model = YOLO(str(weights))
-    m = model.val(data=data, imgsz=imgsz, device=device, split=split, verbose=False)
+    # Ultralytics writes each val's plots under ./runs/ unless told otherwise,
+    # and the working directory is not writable for a `docker run --user`.
+    # Output location only; no number depends on it.
+    val_dir = Path(tempfile.gettempdir()) / "val-runs"
+    m = model.val(
+        data=data,
+        imgsz=imgsz,
+        device=device,
+        split=split,
+        verbose=False,
+        project=str(val_dir),
+        name="evaluate",
+        exist_ok=True,
+    )
     names = m.names
 
     print(f"\n{'=' * 66}")
@@ -149,6 +170,9 @@ def per_class_table(
         split=split,
         conf=CONFUSION_CONF,
         verbose=False,
+        project=str(val_dir),
+        name="evaluate-confusion",
+        exist_ok=True,
     )
     confusion = error_split(cm_metrics.confusion_matrix.matrix, names)
 
@@ -399,9 +423,6 @@ def _with_data_root(data: str, root: Path) -> Path:
     committed spec and flag the override as a field, without an absolute path
     from one machine reaching a committed file.
     """
-    import os
-    import tempfile
-
     import yaml
 
     spec = yaml.safe_load(Path(data).read_text(encoding="utf-8"))
@@ -514,6 +535,10 @@ def main() -> None:
         "so a second split cannot silently overwrite the first.",
     )
     args = p.parse_args()
+    # Checked now: --split train walks every label before it would first touch
+    # the weights, and a missing file then surfaced as a traceback at the end.
+    if not args.weights.is_file():
+        p.error(f"--weights {args.weights} not found")
 
     if args.out is None:
         args.out = REPORTS_DIR / (

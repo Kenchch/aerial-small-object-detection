@@ -470,6 +470,8 @@ def _run(monkeypatch, tmp_path, **kw):
 
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"a source clip")
+    weights = tmp_path / "w.pt"
+    weights.write_bytes(b"a checkpoint")  # main() refuses one that is missing
     out = tmp_path / "track_out.mp4"
     made = _stub_modules(monkeypatch, **kw)
     monkeypatch.setattr(
@@ -478,11 +480,15 @@ def _run(monkeypatch, tmp_path, **kw):
         [
             "track.py",
             "--weights",
-            "w.pt",
+            str(weights),
             "--source",
             str(source),
             "--out",
             str(out),
+            # Never the default, which is the committed reports/tracking.json:
+            # a stubbed run that got as far as publishing overwrote it.
+            "--report",
+            str(tmp_path / "reports" / "tracking.json"),
             # The stubbed torch has no CUDA, and the default '0' is refused.
             "--device",
             "cpu",
@@ -593,9 +599,11 @@ def test_a_failing_video_replace_publishes_neither(tmp_path, monkeypatch):
     _, out, _ = _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
     out.write_bytes(b"the previous run's video")
 
-    reports = track.REPORTS_DIR
+    reports = tmp_path / "reports"
     published_json = reports / "tracking.json"
-    before = published_json.read_bytes() if published_json.is_file() else None
+    reports.mkdir()
+    published_json.write_bytes(b"the previous run's report")
+    before = published_json.read_bytes()
 
     real_replace = Path.replace
 
@@ -615,7 +623,7 @@ def test_a_failing_video_replace_publishes_neither(tmp_path, monkeypatch):
         assert not (reports / "tracking.json.tmp").exists(), (
             "the staged report survived"
         )
-        after = published_json.read_bytes() if published_json.is_file() else None
+        after = published_json.read_bytes()
         assert after == before, "the report was published without its video"
     finally:
         (reports / "tracking.json.tmp").unlink(missing_ok=True)
@@ -635,12 +643,46 @@ def test_successful_main_publishes_custom_report(tmp_path, monkeypatch):
     assert not report.with_suffix(".json.tmp").exists()
 
 
+def test_a_missing_checkpoint_is_refused_before_anything_runs(
+    tmp_path, monkeypatch, capsys
+):
+    _run(monkeypatch, tmp_path, frames_in=3, frames_back=3)
+    (tmp_path / "w.pt").unlink()
+
+    with pytest.raises(SystemExit) as exit_:
+        track.main()
+
+    assert exit_.value.code == 2
+    assert "w.pt not found" in capsys.readouterr().err
+    assert not (tmp_path / "track_out.tmp.mp4").exists()
+
+
+def test_a_cp1252_console_does_not_cost_the_run_its_artefacts(tmp_path, monkeypatch):
+    """Windows gives a redirected stdout its ANSI code page. print_report wrote
+    `≥`, which cp1252 cannot encode, from inside the guard that deletes the
+    staged video and report on any exception - so a finished run left nothing.
+    """
+    import io
+    import sys
+
+    _, out, _ = _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
+    report = tmp_path / "tracking.json"
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--report", str(report)])
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", console)
+
+    track.main()
+
+    assert out.is_file(), "the video was not published"
+    assert report.is_file(), "the report was not published"
+
+
 @pytest.mark.parametrize("collision", ["source", "weights", "out"])
 def test_report_cannot_replace_inputs_or_video(tmp_path, monkeypatch, collision):
     import sys
 
     source, out, _ = _run(monkeypatch, tmp_path, frames_in=1, frames_back=1)
-    target = {"source": source, "weights": Path("w.pt"), "out": out}[collision]
+    target = {"source": source, "weights": tmp_path / "w.pt", "out": out}[collision]
     monkeypatch.setattr(sys, "argv", sys.argv + ["--report", str(target)])
     with pytest.raises(SystemExit, match="must differ"):
         track.main()

@@ -41,6 +41,13 @@ holds the two lists against `requirements.txt`, because a `dependency-name` that
 matches nothing is not an error — it is a config that reviews as correct and has
 no effect.
 
+Ultralytics' own run-time installer is switched off: the scripts and the image
+set `YOLO_AUTOINSTALL=false`. Left on, it installed whatever it judged missing,
+unpinned, into the environment - most damagingly an `onnxruntime` CPU build over
+the pinned `onnxruntime-gpu` whenever an ONNX model ran on the CPU, after which
+every later benchmark silently lost its CUDA rows. Anything a script needs is
+in `requirements.txt` instead, which is why `lap` is pinned there.
+
 Ignoring an upgrade is not a security decision, and this file is not where
 advisories are handled. CI runs `pip-audit -r requirements.txt --strict` on
 every push against a listed set of accepted advisory IDs, so a new advisory

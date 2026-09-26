@@ -7,6 +7,10 @@
 #
 # The image needs src/ and requirements.txt. Everything else is either build
 # output, evidence for the README, or someone's local state.
+#
+# Patterns match from the context root, so `*.pt` excludes ./best.pt and not
+# src/best.pt, and `__pycache__/` missed src/__pycache__, which COPY src/ then
+# shipped. Anything that can appear below the root is written as **/.
 
 .git
 .github
@@ -17,25 +21,25 @@
 # inside the image is a model nobody can update without a rebuild.
 runs/
 datasets/
-*.pt
-*.onnx
-*.engine
-*.onnx.manifest.json
+**/*.pt
+**/*.onnx
+**/*.engine
+**/*.onnx.manifest.json
 
 # Reports, demo media and their sources.
 reports/
 workshop/
-*.mp4
-*.gif
+**/*.mp4
+**/*.gif
 
 # Local environments and caches.
 .venv/
 venv/
-__pycache__/
-*.py[cod]
+**/__pycache__
+**/*.py[cod]
 .pytest_cache/
 .ruff_cache/
-.ipynb_checkpoints/
+**/.ipynb_checkpoints
 
 # Editor / OS.
 .vscode/
@@ -44,7 +48,7 @@ __pycache__/
 Thumbs.db
 
 # Logs and notes.
-*.log
-*.err
-*.pid
+**/*.log
+**/*.err
+**/*.pid
 PROGRESS.md

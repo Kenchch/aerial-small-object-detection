@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from benchmark import TIMED_ITERS, _summarise, onnx_cuda_runnable
+from benchmark import TIMED_ITERS, _summarise, check_ort_build, onnx_cuda_runnable
 
 
 def test_summarise_basic_stats():
@@ -67,3 +67,18 @@ GPU_WHEEL = [
 )
 def test_onnx_cuda_rows_need_a_device_and_a_provider(cuda_device, providers, expected):
     assert onnx_cuda_runnable(cuda_device, providers) is expected
+
+
+def test_a_gpu_machine_with_a_cpu_only_onnxruntime_is_refused():
+    """The pinned GPU build overwritten by a CPU one: the CUDA rows would be
+    skipped and the report published without them."""
+    with pytest.raises(SystemExit, match="onnxruntime-gpu"):
+        check_ort_build(True, ["AzureExecutionProvider", "CPUExecutionProvider"])
+
+
+@pytest.mark.parametrize(
+    ("cuda_device", "providers"),
+    [(True, GPU_WHEEL), (False, GPU_WHEEL), (False, ["CPUExecutionProvider"])],
+)
+def test_consistent_ort_builds_pass(cuda_device, providers):
+    check_ort_build(cuda_device, providers)

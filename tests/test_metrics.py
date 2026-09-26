@@ -291,7 +291,8 @@ def test_export_writes_nothing_into_the_weights_directory(tmp_path):
     Ultralytics writes the .onnx beside the .pt it loaded - verified by
     exporting a checkpoint from a temp directory and finding probe.onnx there -
     so pointing only the *destination* at a cache dir is not enough. The
-    checkpoint is copied into the cache and exported from the copy.
+    checkpoint is copied into a private directory in the cache and exported
+    from the copy.
     """
     weights_dir = tmp_path / "weights"
     weights_dir.mkdir()
@@ -304,7 +305,7 @@ def test_export_writes_nothing_into_the_weights_directory(tmp_path):
 
     def fake_export(src):
         # Stands in for ultralytics: writes beside whatever .pt it was given.
-        assert src.parent == cache, f"exported from {src.parent}, not the cache"
+        assert src.parent.parent == cache, f"exported from {src.parent}"
         produced = src.with_suffix(".onnx")
         produced.write_bytes(b"graph")
         return produced
@@ -335,17 +336,14 @@ def test_the_staged_copy_is_removed_even_when_the_export_fails(tmp_path):
     assert list(cache.iterdir()) == []
 
 
-def test_a_cache_dir_already_holding_that_filename_is_refused(tmp_path):
-    """The export stages the checkpoint under its own basename, then deletes it.
+def test_a_cache_dir_already_holding_that_filename_is_untouched(tmp_path):
+    """`best.pt` is ultralytics' default output name, so a different checkpoint
+    called best.pt in the cache is the normal case, not a strange one.
 
-    `best.pt` is ultralytics' default output name and is gitignored here, so
-    two different checkpoints called best.pt is the normal case, not a strange
-    one. Point --cache-dir at a directory already holding one and the sequence
-    was: copy2 over it, export, then `finally: staged_weights.unlink()`. The
-    stranger's checkpoint was overwritten and then removed, and the benchmark
-    exited 0 - measured, with the victim's bytes gone and no message anywhere.
-
-    A file that is not ours to touch means stop, not "clean up afterwards".
+    Staged under its own basename in the cache, the export once copied over
+    that stranger and then deleted it, exiting 0; a guard then refused the run
+    instead. Exporting from a private directory needs neither: the stranger is
+    never in the way.
     """
     weights_dir = tmp_path / "runs"
     weights_dir.mkdir()
@@ -358,29 +356,48 @@ def test_a_cache_dir_already_holding_that_filename_is_refused(tmp_path):
     victim.write_bytes(b"A DIFFERENT CHECKPOINT SOMEONE CARES ABOUT")
 
     def fake_export(src):
+        assert src.read_bytes() == b"THE MODEL BEING EXPORTED"
         produced = src.with_suffix(".onnx")
         produced.write_bytes(b"graph")
         return produced
 
-    with pytest.raises(FileExistsError, match="already exists and is not"):
-        benchmark.export_onnx(
-            weights, cache / "best_1024.onnx", 1024, exporter=fake_export
-        )
+    benchmark.export_onnx(weights, cache / "best_1024.onnx", 1024, exporter=fake_export)
 
+    assert (cache / "best_1024.onnx").read_bytes() == b"graph"
     assert victim.read_bytes() == b"A DIFFERENT CHECKPOINT SOMEONE CARES ABOUT", (
         "the stranger's checkpoint was modified"
     )
     assert weights.read_bytes() == b"THE MODEL BEING EXPORTED"
 
 
-def test_re_exporting_over_our_own_staged_copy_still_works(tmp_path):
-    """The guard is about a DIFFERENT file, not about the path being occupied.
+@pytest.mark.parametrize("in_cache", [False, True], ids=["weights-dir", "cache-dir"])
+def test_an_existing_best_onnx_is_not_overwritten_or_moved(tmp_path, in_cache):
+    """`yolo export model=best.pt format=onnx` writes best.onnx beside best.pt,
+    and the default cache is the weights directory. Ultralytics wrote its
+    best.onnx over that file, and the rename then took it away."""
+    weights_dir = tmp_path / "weights"
+    weights_dir.mkdir()
+    weights = weights_dir / "best.pt"
+    weights.write_bytes(b"checkpoint")
+    cache = tmp_path / "cache" if in_cache else weights_dir
+    cache.mkdir(exist_ok=True)
+    theirs = cache / "best.onnx"
+    theirs.write_bytes(b"THE USER'S OWN EXPORT")
 
-    Exporting a checkpoint that already lives in the cache directory - the same
-    file, reached by the same path - is the ordinary re-export, and samefile()
-    is what tells the two apart. Refusing it would break the cache hit path
-    this whole function exists to serve.
-    """
+    def fake_export(src):
+        produced = src.with_suffix(".onnx")  # ultralytics' naming: <stem>.onnx
+        produced.write_bytes(b"graph")
+        return produced
+
+    benchmark.export_onnx(weights, cache / "best_1024.onnx", 1024, exporter=fake_export)
+
+    assert theirs.read_bytes() == b"THE USER'S OWN EXPORT"
+    assert (cache / "best_1024.onnx").read_bytes() == b"graph"
+
+
+def test_re_exporting_a_checkpoint_that_lives_in_the_cache_still_works(tmp_path):
+    """Exporting a checkpoint that already lives in the cache directory is the
+    ordinary re-export, and must neither fail nor delete the source."""
     cache = tmp_path / "cache"
     cache.mkdir()
     weights = cache / "best.pt"
@@ -395,6 +412,7 @@ def test_re_exporting_over_our_own_staged_copy_still_works(tmp_path):
 
     assert (cache / "best_1024.onnx").read_bytes() == b"graph"
     assert weights.read_bytes() == b"checkpoint", "the source checkpoint was deleted"
+    assert sorted(p.name for p in cache.iterdir()) == ["best.pt", "best_1024.onnx"]
 
 
 # --- CUDA placement --------------------------------------------------------- #

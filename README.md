@@ -45,9 +45,13 @@ Download the recorded checkpoint before evaluation:
 
 ```bash
 mkdir -p runs/n_1024/weights
-curl -L -o runs/n_1024/weights/best.pt \
+curl -fL --retry 3 -o runs/n_1024/weights/best.pt \
   https://github.com/Kenchch/aerial-small-object-detection/releases/download/v1.0/best.pt
+echo "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e  runs/n_1024/weights/best.pt" | sha256sum -c -
 ```
+
+On macOS use `shasum -a 256 -c -`; on Windows compare `Get-FileHash` output
+with the digest.
 
 [Training, evaluation and tracking commands](docs/DESIGN.md#usage).
 
