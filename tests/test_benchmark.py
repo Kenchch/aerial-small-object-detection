@@ -8,6 +8,7 @@ no skip guard needed, and these run on a bare clone.
 import argparse
 import json
 import math
+import types
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,66 @@ def test_a_bad_map_tolerance_is_explained_on_the_command_line():
         argparse.ArgumentTypeError, match=r"finite fraction in \[0, 1\]"
     ):
         benchmark._map_tolerance_arg("2")
+
+
+# --- one protocol per question (P04) and interleaved timing (P31) ------------ #
+
+
+class _Recorder:
+    def __init__(self, maps):
+        self.calls, self._maps = [], iter(maps)
+
+    def __call__(self, path, **kwargs):
+        return self
+
+    def val(self, **kwargs):
+        self.calls.append(kwargs)
+        m50, m95 = next(self._maps)
+        return types.SimpleNamespace(box=types.SimpleNamespace(map50=m50, map=m95))
+
+
+def test_the_gate_compares_square_with_square(tmp_path):
+    """The headline keeps evaluate.py's rect=True; the export is gated against
+    a square PyTorch pass, because that is the only letterbox a static ONNX
+    graph gets. Comparing across the two measured preprocessing, not export."""
+    yolo = _Recorder([(0.3748, 0.2216), (0.3752, 0.2223), (0.3752, 0.2223)])
+
+    headline, square = benchmark.pytorch_accuracy(
+        yolo, Path("w.pt"), "d.yaml", 1024, "0", tmp_path
+    )
+    onnx = benchmark.onnx_accuracy(
+        yolo, Path("w.onnx"), "d.yaml", 1024, "0", False, tmp_path
+    )
+
+    headline_call, square_call, onnx_call = yolo.calls
+    assert "rect" not in headline_call  # Ultralytics' .val() default, rect=True
+    assert square_call["rect"] is False and onnx_call["rect"] is False
+    assert square_call["imgsz"] == onnx_call["imgsz"] == 1024
+    assert square_call["data"] == onnx_call["data"]
+    assert headline == {"mAP50": 0.3748, "mAP50_95": 0.2216}
+    assert benchmark.accuracy_delta(square, onnx, 0.002)["mAP50_95"] == 0.0
+
+
+def test_interleaving_alternates_and_reports_the_spread():
+    """ABBA: each graph goes first in half the blocks, so a steady drift
+    cannot favour one of them."""
+    order, now = [], [0.0]
+
+    def clock():
+        return now[0]
+
+    def graph(name, ms):
+        def run():
+            order.append(name)
+            now[0] += ms / 1000
+
+        return run
+
+    got = benchmark.interleaved_speedup(
+        graph("fp16", 8.0), graph("fp32", 10.0), blocks=4, per_block=2, clock=clock
+    )
+
+    firsts = [order[i] for i in range(0, len(order), 4)]
+    assert firsts == ["fp16", "fp32", "fp16", "fp32"]
+    assert got["speedup_pct_median"] == got["speedup_pct_min"] == 20.0
+    assert (got["blocks"], got["iters_per_block"]) == (4, 2)

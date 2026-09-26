@@ -167,12 +167,12 @@ mAP50-95. Since mAP50-95 averages IoU thresholds from 0.5 to 0.95, a two-pixel
 boundary error on an 11 px box costs what it would not cost on a bus. The gap
 is localisation precision under scale, not recognition.
 
-![Normalised confusion matrix on the val split](../runs/n_1024/confusion_matrix_normalized.png)
+![Normalised confusion matrix on the val split at conf = 0.25](../reports/confusion_matrix_val_conf0.25.png)
 
-*This figure is the training-time matrix, built at conf = 0.001 - the
-superseded operating point behind the "mostly misclassified" reading
-discussed below - not the conf = 0.25 split the table reports. Its cells
-will not match the table's.*
+*Drawn by `src/evaluate.py` from the same conf = 0.25 pass as `error_split`,
+so its cells are the table's. (The training-time matrix under `runs/n_1024/`
+was built at conf = 0.001 - the superseded operating point behind the "mostly
+misclassified" reading discussed below - and was the figure here before.)*
 
 Columns are the true class and sum to 1, so each column splits three ways:
 correct, missed (the `background` row), and misclassified (everything else).
@@ -239,22 +239,25 @@ raw PyTorch model across backends.
 
 | backend | core | + host transfer |
 | --- | --- | --- |
-| PyTorch (CUDA, eager) | 12.51 ms · 80.0 FPS | 15.22 ms · 65.7 FPS |
-| ONNX Runtime (CUDA) | **10.43 ms · 95.8 FPS** | **12.68 ms · 78.8 FPS** |
-| ONNX Runtime (CPU) | 124.01 ms · 8.1 FPS | 124.01 ms · 8.1 FPS |
+| PyTorch (CUDA, eager) | 12.83 ms · 77.9 FPS | 15.14 ms · 66.1 FPS |
+| ONNX Runtime (CUDA) | **10.03 ms · 99.7 FPS** | **11.65 ms · 85.9 FPS** |
+| ONNX Runtime (CPU) | 112.96 ms · 8.9 FPS | 112.96 ms · 8.9 FPS |
 
 **Two regimes, because comparing across them is how this gets read wrong.**
 `core` feeds a tensor already resident in VRAM and leaves the output there.
 `+ host transfer` starts from a CPU array and brings the output back.
 ONNX Runtime's `sess.run` takes and returns numpy, so it is transfer-inclusive
 by construction; timing that against a GPU-resident PyTorch forward — which is
-what this table used to do — charges ONNX ~2.2 ms of copying PyTorch never
-paid, and reported the export as **1 % slower when like-for-like it is 17 %
-faster**. On CPU there is no copy to separate, so the two columns coincide.
+what this table used to do — charges ONNX ~1.6 ms of copying PyTorch never
+paid, and reported the export as **9 % faster when like-for-like it is 22 % faster**. On CPU there is no copy to separate, so the two columns coincide.
 
-ONNX is 17 % faster core-to-core and 17 % transfer-to-transfer. The more
-decisive number is still CPU: **9.8× slower** than ONNX on GPU, both
-host-in/host-out (11.9× against the GPU's core figure) — the case for keeping
+ONNX is 22 % faster core-to-core and 23 % transfer-to-transfer in this
+run. That ratio is a session's, not the export's: across 4 separate runs
+([summary](../reports/benchmark_repeats/summary.json)) it was 7-26 % core-to-core,
+median 23 %, with PyTorch steady to 0.3 ms and the ONNX median moving
+from 9.54 to 11.70 ms. The more
+decisive number is still CPU: **9.7× slower** than ONNX on GPU, both
+host-in/host-out (11.3× against the GPU's core figure) — the case for keeping
 inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
@@ -274,7 +277,14 @@ onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
 **The export is validated, not assumed.** Latency beside a PyTorch mAP
 invites the reader to take it that ONNX kept the accuracy, which is an
 assumption: opset choice, constant folding and precision can all move it.
-Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds MAP_TOLERANCE, 0.002. The export's manifest
+Both backends are validated on the same split and the same preprocessing —
+PyTorch mAP50 0.3752 / mAP50-95 0.2223, ONNX 0.3752 / 0.2223, a delta of +0.0000 / +0.0000 — and the run
+fails if it exceeds MAP_TOLERANCE, 0.002. "The same preprocessing" is the
+point: a static ONNX graph is always validated with a square letterbox, while
+PyTorch's `.val()` defaults to rectangular batches. The gate once compared those
+two, and its +0.0007 was the preprocessing difference - square against square,
+the export is exact. The headline 0.3748 / 0.2216 keeps the rectangular
+protocol, which is what `src/evaluate.py` reports. The export's manifest
 (`<graph>.onnx.manifest.json`, beside the graph - the `.onnx` itself does not
 carry it) records the sha256 of the checkpoint it came from, so retraining
 forces a re-export rather than benchmarking yesterday's graph against today's
@@ -315,20 +325,20 @@ The [demo preview above](#demo-at-a-glance) shows this pipeline in action.
 
 | stage | median | mean |
 | --- | --- | --- |
-| decode | 0.94 ms | 1.1 ms |
-| detect + track | 32.21 ms | **97.93 ms** |
-| ├ preprocess | 5.19 ms | |
-| ├ forward | 13.16 ms | |
+| decode | 0.81 ms | 0.99 ms |
+| detect + track | 32.42 ms | **77.14 ms** |
+| ├ preprocess | 4.72 ms | |
+| ├ forward | 13.12 ms | |
 | ├ postprocess (NMS) | 1.77 ms | |
-| └ association + overhead | 11.81 ms | |
-| annotate | 3.11 ms | 3.55 ms |
-| encode | 2.46 ms | 3.01 ms |
-| open + flush (once per run) | | 0.105 ms |
-| **accounted** | | **105.7 ms** |
-| **wall per frame** | | **105.77 ms** |
+| └ association + overhead | 12.49 ms | |
+| annotate | 3.18 ms | 3.58 ms |
+| encode | 2.58 ms | 3.08 ms |
+| open + flush (once per run) | | 0.715 ms |
+| **accounted** | | **85.51 ms** |
+| **wall per frame** | | **85.58 ms** |
 
 The four sub-rows are each a median over frames, so they do not sum to the
-parent median — 31.93 against 32.21 here. That is the honest form: the frame
+parent median — 32.10 against 32.42 here. That is the honest form: the frame
 with the median total is not the frame with the median preprocess time.
 
 Full run in `reports/tracking.json`. Coverage 99.9 % — the profile accounts
@@ -347,8 +357,8 @@ range rather than a stable measurement. The *ratios* between stages are far
 steadier than the absolute milliseconds, and they are what the argument below
 rests on.
 
-**`detect + track` (32.21 ms) is not the same measurement as the 11.74 ms
-PyTorch core row in the backend table above, and the 20.47 ms between them is the
+**`detect + track` (32.42 ms) is not the same measurement as the 12.83 ms
+PyTorch core row in the backend table above, and the 19.59 ms between them is the
 interesting part.** That row times an `nn.Module` forward pass on a tensor
 already resident in VRAM. This one times `model.track(frame)` on a decoded BGR
 frame, which additionally does letterbox resize, BGR→RGB, `/255`, HWC→CHW, the
@@ -358,49 +368,49 @@ above, taken from Ultralytics' `Results.speed`, are where that time goes.
 reports; the tracker is not separately instrumented, so it carries the
 per-call Python overhead too.)
 
-**The forward pass is 41 % of this stage. Preprocessing and association are
+**The forward pass is 40 % of this stage. Preprocessing and association are
 another 53 %,** and neither is affected by the export format. That is the
 argument against reading the backend table as an optimisation roadmap: ONNX
-buys 2.47 ms on the forward pass, while 19.05 ms per frame sits in the
+buys 2.80 ms on the forward pass, while the other three sub-rows' medians
+add to 18.98 ms per frame of
 surrounding work — batching the host-to-device copy, or moving letterboxing
 onto the GPU, is worth more here than anything the export format can do.
 
-The remaining 11.74 → 13.16 ms difference on the forward pass itself is
+The remaining 12.83 → 13.12 ms difference on the forward pass itself is
 per-call dispatch: benchmark.py reuses one pre-allocated tensor with static
 shapes, `model.track()` does not.
 
 Median and mean disagree sharply on one stage because of one frame: the first
-frame costs **5,805 ms — 180× the steady-state 32.21 ms**, which is cold-start
+frame costs **4,063 ms — 125× the steady-state 32.42 ms**, which is cold-start
 initialisation: the CUDA context and cuDNN's autotuning, plus Ultralytics
 building its predictor and the ByteTrack instance, both of which are
 constructed lazily on the first `model.track()` call. It is not attributed to
 CUDA alone because it has not been broken down — what the profile shows is that
 the first frame costs this, not which part of it costs what.
 
-Amortised over 90 frames that is most of the gap between the mean (97.93 ms)
-and the median (32.21 ms), which is why this clip's end-to-end throughput
-(**9.5 FPS**) is well below its steady-state rate.
-Steady state has to sum every stage's median, not just the largest one — decode,
-annotate and encode still happen every frame once the cold start is behind you
-— which for this run gives **38.72 ms/frame → 25.8 FPS**, not the ~31 FPS a
-detect+track-only figure would suggest, and nothing like the 87 FPS the ONNX row
-implies. That distinction matters for short-clip batch processing versus a
+Amortised over 90 frames that is most of the gap between the mean (77.14 ms)
+and the median (32.42 ms), which is why this clip's end-to-end throughput
+(**11.7 FPS**) is well below its steady-state rate.
+Steady state is measured, not derived: every frame's total across all four
+stages, frames 2-90 - decode, annotate and encode still happen every frame once
+the cold start is behind you - which for this run is **39.54 ms/frame →
+25.3 FPS**, not the ~31 FPS a detect+track-only figure would suggest,
+and nothing like the 86 FPS the ONNX row implies. (It used to be
+the sum of the four stage medians, which come from different frames; the
+stages are right-skewed and that sum read 1-3 % fast.) That distinction matters for short-clip batch processing versus a
 long-running stream.
 
-**One run is not a rate, and this one was the fastest.** Repeating the same
-protocol in five separate processes and applying the same derivation to each
-gives 40.14, 41.22, 43.75, 48.74 and 56.29 ms/frame — a median of **43.75 ms,
-22.9 FPS**, with a range of 17.8 to 24.9 FPS. The 38.72 ms above is not the
-middle of that spread; it is faster than all five, so quoting it as the headline
-was quoting the best run rather than the typical one. The first screen now
-carries the median and the range, and [the repeat
+**One run is not a rate.** Repeating the same protocol in five separate
+processes gives 25.0, 25.3, 25.8, 26.4 and 27.0 FPS — a median of **25.8 FPS**. A
+previous set of repeats, measured the older way, found the single committed
+run faster than all five and the headline quoting the best run; this one sits
+inside the spread. The first screen carries the median and the range, and [the repeat
 summary](../reports/tracking_repeats/summary.json) records both, derived by
 `scripts/summarize_tracking.py` from the five committed reports rather than
 retyped.
 
-Summing per-stage medians is also what excludes the cold start: the first frame
-costs about 180x a normal one, which moves a mean over 90 frames and does not
-move a median.
+Leaving out the first frame is what excludes the cold start: it costs over a
+hundred normal frames, and left in, it would dominate a 90-frame mean.
 
 Association statistics — not association *quality*, which cannot be stated
 without ground-truth track ids this clip does not have: 306 unique tracks,
@@ -682,6 +692,14 @@ python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024
 # a within-session ratio rather than a comparison across two runs.
 python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024 --half
 
+# The cross-session range: more separate processes of the same benchmark, then
+# a summary of their within-session ratios -> reports/benchmark_repeats/
+for n in 1 2 3; do
+  python src/benchmark.py --weights runs/n_1024/weights/best.pt --imgsz 1024 \
+    --out reports/benchmark_repeats/run_$n.json
+done
+python scripts/summarize_benchmarks.py
+
 # Video inference + ByteTrack, with a staged latency profile.
 #
 # The plain form picks the densest val frame, which depends on which dataset
@@ -694,6 +712,14 @@ python src/make_demo_clip.py --frames 90 --fps 15 \
   --expected-clip-sha256 ef545c205123b91c1bee517613381b3cd87ab66930186427742f6c4e73b8e87b
 
 python src/track.py --weights runs/n_1024/weights/best.pt --source reports/demo_pan.mp4
+
+# The five tracking repeats and their summary -> reports/tracking_repeats/
+for n in 1 2 3 4 5; do
+  python src/track.py --weights runs/n_1024/weights/best.pt \
+    --source reports/demo_pan.mp4 --out reports/track_repeat.mp4 \
+    --report reports/tracking_repeats/run_$n.json
+done
+python scripts/summarize_tracking.py
 ```
 
 The second digest is the one that matters. Without it the sidecar is written

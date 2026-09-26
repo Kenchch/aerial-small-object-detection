@@ -12,22 +12,22 @@ for studying accuracy, GPU placement and inference latency on a laptop GPU.
 | Training | YOLO11n, 1024 px, 50 epochs, RTX 2070 Max-Q |
 | Standalone validation | mAP50 0.375 / mAP50-95 0.222 |
 | Held-out test-dev | mAP50 0.318 / mAP50-95 0.183 on 1,610 images, only ever evaluated with the fixed v1.0 checkpoint |
-| ONNX CUDA core latency | 10.4 ms; 17% faster than eager in the FP32 run (one session; the ratio moves between sessions) |
-| CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0007 |
+| ONNX CUDA core latency | 10.0 ms; 22% faster than eager in this run, 7-26% across 4 sessions (median 23%) |
+| CUDA placement and parity | 238/238 nodes; mAP50-95 delta +0.0000 against PyTorch at the same letterbox |
 | ONNX CPU | Approximately 10× slower than ONNX CUDA, both host-in/host-out, in this benchmark |
-| Object scale / tracking | 92.4% of validation boxes small at 640 px; 22.9 FPS steady-state, median of five repeats (17.8-24.9) |
+| Object scale / tracking | 92.4% of validation boxes small at 640 px; 25.8 FPS steady-state, median of five repeats (25.0-27.0) |
 
-Latency is reproducible within a session and not across them. Three
-consecutive runs of `src/benchmark.py` on the same machine and checkpoint gave
-ONNX CUDA core medians of 10.35, 10.37 and 10.43 ms — a spread under 1% — while
-an earlier session on the same GPU recorded 9.3 ms. Ratios move too: the
-`--half` run re-measured PyTorch and the FP32 graph in one process and got
-30% where this run got 17%. The 100 timed iterations
+Latency is reproducible within a session and not across them.
+[Four separate runs](reports/benchmark_repeats/summary.json) of `src/benchmark.py` on the same
+machine and checkpoint gave ONNX CUDA core medians from 9.54 to 11.70 ms,
+and the eager-vs-ONNX ratio moved with them: 7% to 26% faster, median
+23%. Each ratio is within one session; none compares two. The 100 timed iterations
 behind each median control the noise inside a run; they say nothing about
 driver version, thermal state or what else the machine was doing. Read these as
 one machine's numbers on one day, not as a device specification.
 
-The tracking FPS is derived from stage medians, not measured end-to-end throughput.
+The steady-state tracking FPS is measured over frames 2-90, after the cold
+first frame; end-to-end throughput including it is lower, below.
 See [benchmark](reports/benchmark.json), [tracking](reports/tracking.json) and
 [full numerical evidence](docs/DESIGN.md). Training-time AMP validation differs
 slightly from standalone fp32 evaluation of the same checkpoint.
@@ -86,27 +86,30 @@ Reproduce with `python src/evaluate.py --weights runs/n_1024/weights/best.pt
 --data docker/VisDrone.yaml --data-root "$DATASETS/VisDrone" --split test`.
 
 **FP16.** [FP16 ONNX](reports/benchmark_fp16.json) reached mAP50-95 **0.2211**
-on val against the FP32 PyTorch baseline's 0.2216 — a delta of **-0.0005**,
-inside the same 0.002 gate the FP32 export has to pass.
+on val against the FP32 PyTorch baseline's 0.2223, both square-letterboxed
+— a delta of **-0.0012**, inside the same 0.002 gate the FP32 export has to pass.
+(The FP32 export itself measures +0.0000 on that protocol, so this is what
+half precision cost.)
 The graph is 5.24 MiB against 10.37, and **240/240 nodes ran on CUDA**.
 
-Core latency was **7.69 ms** against **9.24 ms** for the FP32 graph:
-**16.8% faster**. Both figures come from the same process, which is the only
-way this ratio means anything — the FP32 graph is re-benchmarked during a
-`--half` run for exactly that reason. Measured against the 10.43 ms in the
-table above, from a different session, the same FP16 result would read 26%
-faster; the difference between 16.8 and 26 is between-session variance, not
-precision. Transfer-inclusive it was 9.92 ms.
+Core latency was **7.06 ms** against **9.40 ms** for the FP32 graph in the
+same process. Timed in 10 alternating blocks, so neither graph always ran on a
+cooler or hotter card, FP16 was **24.6% faster**, with the per-block
+ratio ranging 18.8-37.5%: the effect is real and its size is not
+precise. Measured against the 10.03 ms in the table above, from a different
+session, the same FP16 result would read 30% faster - a comparison
+across sessions, which is why `--half` re-benchmarks the FP32 graph.
+Transfer-inclusive it was 9.29 ms.
 
 Reproduce with `python src/benchmark.py --weights <best.pt> --data
 <dataset.yaml> --half`.
 
 **Tracking repeats.** [Five repeats](reports/tracking_repeats/summary.json),
 each decoding and encoding the same 90-frame synthetic pan, gave
-**8.4 FPS median** end-to-end, range **7.2-8.9 FPS**: wall time over all 90
-frames, including a 6.1-7.3 s first-frame warm-up. The 22.9 FPS steady-state
-figure above comes from the same runs with the warm-up excluded (sum of stage
-medians). Machine-specific, not general
+**11.9 FPS median** end-to-end, range **11.4-12.1 FPS**: wall time over all 90
+frames, including a 4.0-4.3 s first-frame warm-up. The 25.8 FPS steady-state
+figure above comes from the same runs with the warm-up excluded (frames
+2-90 over the time they took). Machine-specific, not general
 edge-device performance. Rebuild with `python scripts/summarize_tracking.py`.
 
 **GPU smoke test.** Opt-in: `RUN_GPU=1 AERIAL_TEST_IMAGE=<local image> pytest

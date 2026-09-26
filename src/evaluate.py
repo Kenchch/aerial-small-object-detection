@@ -21,6 +21,7 @@ Usage
 import argparse
 import json
 import os
+import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -177,6 +178,12 @@ def per_class_table(
         exist_ok=True,
     )
     confusion = error_split(cm_metrics.confusion_matrix.matrix, names)
+    # Ultralytics draws this pass's normalised matrix as it validates. It is
+    # the figure that matches `error_split`; the one DESIGN.md used to embed
+    # was the training-time matrix at conf=0.001, whose cells and conclusion
+    # contradicted the table beside it. main() puts it next to the report.
+    save_dir = getattr(cm_metrics, "save_dir", None)
+    plot = Path(save_dir) / "confusion_matrix_normalized.png" if save_dir else None
 
     worst = min(rows, key=lambda x: x[4])
     best = max(rows, key=lambda x: x[4])
@@ -208,6 +215,8 @@ def per_class_table(
         # P/R beside them are not the same operating point.
         "error_split_conf": CONFUSION_CONF,
         "error_split_iou": CONFUSION_IOU,
+        # Removed by main() before the report is written.
+        "_confusion_plot": plot if plot is not None and plot.is_file() else None,
     }
 
 
@@ -657,6 +666,14 @@ def main() -> None:
             temp_spec.unlink(missing_ok=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    accuracy = report["accuracy"]
+    plot = accuracy.pop("_confusion_plot", None) if accuracy else None
+    if plot is not None:
+        figure = args.out.with_name(
+            f"confusion_matrix_{args.split}_conf{CONFUSION_CONF:g}.png"
+        )
+        shutil.copyfile(plot, figure)
+        accuracy["error_split_plot"] = figure.name
     # allow_nan=False: this file exists to be quoted, so it has to be readable
     # by something other than Python. Any NaN/Infinity that reaches here is a
     # bug in a metric, and failing loudly beats emitting a file that jq and

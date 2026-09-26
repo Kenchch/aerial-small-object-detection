@@ -113,3 +113,19 @@ def test_track_statistics(report):
 def test_a_mismatched_source_is_recorded_as_such(report):
     assert report(source_matches=False)["source"]["ran_with_mismatch"] is True
     assert report(source_matches=True)["source"]["ran_with_mismatch"] is False
+
+
+def test_steady_state_is_per_frame_totals_after_the_first(report):
+    """Per-frame totals [104, 25, 36, 61]; without the cold first frame,
+    122 ms over 3 frames. The sum of per-stage medians - 2.5 + 35 + 1 + 2 =
+    40.5 ms - describes no frame and reads faster than the run was."""
+    assert report()["steady_state"] == {
+        "frames_excluded": 1,
+        "frame_ms_median": 36.0,
+        "frame_ms_mean": 40.67,
+        "fps": 24.6,
+    }
+
+
+def test_no_frames_after_the_first_means_no_steady_state():
+    assert track.steady_state([1.0], [5.0], [1.0], [1.0]) is None

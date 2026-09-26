@@ -6,16 +6,16 @@
   "mAP_source": "PyTorch FP32, rect=True (evaluate.py's protocol)",
   "pytorch_cuda": {
     "core": {
-      "median_ms": 12.83,
-      "p95_ms": 17.21,
-      "min_ms": 11.88,
-      "fps": 77.9
+      "median_ms": 12.79,
+      "p95_ms": 15.78,
+      "min_ms": 11.58,
+      "fps": 78.2
     },
     "transfer_inclusive": {
-      "median_ms": 15.14,
-      "p95_ms": 18.6,
-      "min_ms": 14.51,
-      "fps": 66.1
+      "median_ms": 15.57,
+      "p95_ms": 25.49,
+      "min_ms": 14.45,
+      "fps": 64.2
     }
   },
   "onnx_size_mb": 10.37,
@@ -54,16 +54,16 @@
   },
   "onnx_cuda": {
     "core": {
-      "median_ms": 10.03,
-      "p95_ms": 11.71,
-      "min_ms": 9.55,
-      "fps": 99.7
+      "median_ms": 9.58,
+      "p95_ms": 9.96,
+      "min_ms": 8.92,
+      "fps": 104.4
     },
     "transfer_inclusive": {
-      "median_ms": 11.65,
-      "p95_ms": 12.74,
-      "min_ms": 11.26,
-      "fps": 85.9
+      "median_ms": 11.72,
+      "p95_ms": 13.61,
+      "min_ms": 11.11,
+      "fps": 85.4
     }
   },
   "onnx_cuda_placement": {
@@ -76,16 +76,16 @@
   },
   "onnx_cpu": {
     "core": {
-      "median_ms": 112.96,
-      "p95_ms": 139.76,
-      "min_ms": 95.7,
-      "fps": 8.9
+      "median_ms": 150.15,
+      "p95_ms": 184.86,
+      "min_ms": 129.11,
+      "fps": 6.7
     },
     "transfer_inclusive": {
-      "median_ms": 112.96,
-      "p95_ms": 139.76,
-      "min_ms": 95.7,
-      "fps": 8.9
+      "median_ms": 150.15,
+      "p95_ms": 184.86,
+      "min_ms": 129.11,
+      "fps": 6.7
     }
   },
   "environment": {

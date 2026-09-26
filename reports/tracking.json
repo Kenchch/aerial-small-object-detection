@@ -1,38 +1,44 @@
 {
   "frames": 90,
-  "wall_s": 9.52,
-  "end_to_end_fps": 9.5,
-  "per_frame_wall_ms": 105.77,
+  "wall_s": 7.7,
+  "end_to_end_fps": 11.7,
+  "per_frame_wall_ms": 85.58,
   "stage_ms_median": {
-    "decode": 0.94,
-    "detect_and_track": 32.21,
-    "annotate": 3.11,
-    "encode": 2.46
+    "decode": 0.81,
+    "detect_and_track": 32.42,
+    "annotate": 3.18,
+    "encode": 2.58
   },
   "open_and_flush_ms": {
-    "setup": 8.38,
-    "flush": 1.07,
-    "amortised_per_frame": 0.105
+    "setup": 53.3,
+    "flush": 11.04,
+    "amortised_per_frame": 0.715
   },
   "stage_ms_mean": {
-    "decode": 1.1,
-    "detect_and_track": 97.93,
-    "annotate": 3.55,
-    "encode": 3.01
+    "decode": 0.99,
+    "detect_and_track": 77.14,
+    "annotate": 3.58,
+    "encode": 3.08
   },
   "detect_and_track_ms_median": {
-    "preprocess": 5.19,
-    "forward": 13.16,
+    "preprocess": 4.72,
+    "forward": 13.12,
     "postprocess_nms": 1.77,
-    "association_and_overhead": 11.81
+    "association_and_overhead": 12.49
+  },
+  "steady_state": {
+    "frames_excluded": 1,
+    "frame_ms_median": 39.47,
+    "frame_ms_mean": 39.54,
+    "fps": 25.3
   },
   "warmup": {
-    "first_frame_ms": 5804.6,
-    "steady_state_ms": 32.21,
-    "warmup_penalty_x": 180.2
+    "first_frame_ms": 4063.4,
+    "steady_state_ms": 32.42,
+    "warmup_penalty_x": 125.3
   },
   "reconciliation": {
-    "accounted_mean_ms": 105.7,
+    "accounted_mean_ms": 85.51,
     "unaccounted_ms": 0.07,
     "coverage_pct": 99.9
   },
@@ -48,6 +54,7 @@
   },
   "config": {
     "weights": "runs/n_1024/weights/best.pt",
+    "weights_sha256": "8786213fc488fc8b94bdb1c8c576e377eb8f2befaa258e0338b3c5efbc26382e",
     "out": "reports/track_out.mp4",
     "imgsz": 1024,
     "conf": 0.25,

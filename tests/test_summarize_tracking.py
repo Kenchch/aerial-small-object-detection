@@ -87,12 +87,17 @@ def test_the_protocol_counts_the_runs_it_has(repeats):
 
 
 def test_the_release_is_claimed_only_from_a_recorded_digest(repeats):
-    """The committed runs predate weights_sha256, so they cannot claim it."""
-    assert "digest not recorded" in summarize_tracking.summarize(repeats)["protocol"]
-
-    release = summarize_tracking._release_sha256()
-    for path in repeats.glob("run_*.json"):
-        _edit(path, lambda r: r["config"].update(weights_sha256=release))
+    """The release is named only when every run recorded its digest."""
     assert (
         "release v1.0 checkpoint" in summarize_tracking.summarize(repeats)["protocol"]
     )
+
+    for path in repeats.glob("run_*.json"):
+        _edit(path, lambda r: r["config"].pop("weights_sha256"))
+    assert "digest not recorded" in summarize_tracking.summarize(repeats)["protocol"]
+
+    for path in repeats.glob("run_*.json"):
+        _edit(path, lambda r: r["config"].update(weights_sha256="ab" * 32))
+    protocol = summarize_tracking.summarize(repeats)["protocol"]
+    assert "release" not in protocol
+    assert "sha256 abababababab" in protocol
