@@ -42,5 +42,6 @@ updates:
       - dependency-name: onnx
       - dependency-name: onnxslim
       - dependency-name: onnxruntime-gpu
+      - dependency-name: lap
       - dependency-name: opencv-python
       - dependency-name: numpy

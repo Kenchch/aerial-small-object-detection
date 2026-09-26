@@ -106,8 +106,6 @@ edge-device performance. Rebuild with `python scripts/summarize_tracking.py`.
 
 I set the problem, the data contracts and the quality rules, ran the benchmarks
 and reviewed every diff; Claude Code and OpenAI Codex drafted code, refactored
-and scaffolded tests. The full note — including the `Co-Authored-By` trailers
-removed from this repository's history on 6 September 2026 — is on my profile:
-[How I use AI tools](https://github.com/Kenchch/Kenchch#how-i-use-ai-tools).
+and scaffolded tests.
 
 Runtime upgrade decisions are recorded in [dependency review](docs/DEPENDENCIES.md).

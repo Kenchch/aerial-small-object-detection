@@ -246,6 +246,50 @@ def test_design_parity_paragraph_matches_the_benchmark():
     )
 
 
+def test_design_backend_ratios_match_the_benchmark():
+    """The percentages and multiples under DESIGN.md's backend table.
+
+    The table was refreshed from benchmark.json while the prose beneath it kept
+    an older session's 21 % and 11.1× - the same page contradicting itself, and
+    the README's 17 % with it. Each figure is derived here the way the prose
+    describes it, so a regenerated report fails until the prose follows.
+    """
+    b = _report("benchmark.json")
+
+    def med(row: str, regime: str) -> float:
+        return b[row][regime]["median_ms"]
+
+    def faster(new: float, old: float) -> str:
+        pct = 100 * (1 - new / old)
+        return f"{abs(pct):.0f} % {'faster' if pct >= 0 else 'slower'}"
+
+    core = faster(med("onnx_cuda", "core"), med("pytorch_cuda", "core"))
+    transfer = 100 * (
+        1
+        - med("onnx_cuda", "transfer_inclusive")
+        / med("pytorch_cuda", "transfer_inclusive")
+    )
+    # The old table's comparison: transfer-inclusive ONNX against core PyTorch.
+    mismatched = faster(
+        med("onnx_cuda", "transfer_inclusive"), med("pytorch_cuda", "core")
+    )
+    cpu = med("onnx_cpu", "transfer_inclusive")
+    design = " ".join(_design().split())  # the prose wraps mid-phrase
+
+    assert (
+        f"ONNX is {core} core-to-core and {transfer:.0f} % transfer-to-transfer"
+        in design
+    )
+    assert (
+        f"reported the export as **{mismatched} when like-for-like it is {core}**"
+        in (design)
+    )
+    copy_ms = med("onnx_cuda", "transfer_inclusive") - med("onnx_cuda", "core")
+    assert f"charges ONNX ~{copy_ms:.1f} ms of copying" in design
+    assert f"**{cpu / med('onnx_cuda', 'transfer_inclusive'):.1f}× slower**" in design
+    assert f"({cpu / med('onnx_cuda', 'core'):.1f}× against the GPU's core" in design
+
+
 def test_design_states_every_repeat_and_the_median_it_took():
     """DESIGN.md lists all five per-run figures, not just the summary.
 
