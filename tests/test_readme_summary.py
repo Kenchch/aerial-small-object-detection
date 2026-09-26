@@ -430,3 +430,36 @@ def test_the_summary_reports_the_steady_state_it_can_derive():
         assert set(stages) == {"decode", "detect_and_track", "annotate", "encode"}, (
             f"{path.name} carries stages the summary does not sum: {sorted(stages)}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# label_scale -- reports/evaluation.json and reports/evaluation_train.json
+# --------------------------------------------------------------------------- #
+
+
+def test_readme_small_object_share_matches_evaluation():
+    share = _report("evaluation.json")["label_scale"]["share_pct_coco_at_640"]
+    assert f"{share['small_lt_32x32px']}% of validation boxes small at 640 px" in (
+        _readme()
+    )
+
+
+def test_design_label_scale_table_matches_evaluation():
+    ls = _report("evaluation.json")["label_scale"]
+    share = ls["share_pct_coco_at_640"]
+    design = _design()
+    assert f"(val, {ls['boxes']:,} boxes)" in design
+    assert f"**{share['small_lt_32x32px']} %**" in design
+    assert f"| {share['medium_32_to_96px']} % |" in design
+    assert f"| {share['large_gt_96x96px']} % |" in design
+    assert f"covers {ls['median_box_area_pct_of_frame']:.3f} % of the frame" in design
+    flat = " ".join(design.split())
+    assert f"**{ls['median_box_side_px']['at_640']:.0f} px** object at the YOLO" in flat
+    assert f"**{ls['median_box_side_px']['at_1024']:.0f} px** at 1024 px" in flat
+
+
+def test_design_train_split_scale_matches_evaluation_train():
+    ls = _report("evaluation_train.json")["label_scale"]
+    flat = " ".join(_design().split())
+    small = ls["share_pct_coco_at_640"]["small_lt_32x32px"]
+    assert f"{small} % small across {ls['boxes']:,} boxes" in flat

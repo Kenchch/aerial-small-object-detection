@@ -25,6 +25,7 @@ Usage
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +39,40 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def main() -> None:
+def _ranged_int(lo: int, hi: int | None = None):
+    """An argparse type: an int in [lo, hi], refused at parse time.
+
+    Unchecked, a bad value either failed after the whole clip had been read,
+    with a traceback about something else, or was accepted silently and then
+    written into the provenance record as if it meant something.
+    """
+
+    def parse(value):
+        try:
+            n = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
+        if n < lo or (hi is not None and n > hi):
+            bound = f">= {lo}" if hi is None else f"in [{lo}, {hi}]"
+            raise argparse.ArgumentTypeError(f"must be {bound}, got {n}")
+        return n
+
+    return parse
+
+
+def _sha256_arg(value: str) -> str:
+    """A sha256 digest as argparse input: trimmed, lower-cased, and checked.
+
+    Compared as typed, the same digest pasted in upper case or with a trailing
+    space was reported as a different frame or a different run.
+    """
+    digest = value.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise argparse.ArgumentTypeError(f"not a sha256 hex digest: {value!r}")
+    return digest
+
+
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument(
         "--source", type=Path, default=PROJECT_ROOT / "reports" / "track_out.mp4"
@@ -48,13 +82,16 @@ def main() -> None:
     )
     p.add_argument(
         "--fps",
-        type=int,
+        # GIF delays are whole hundredths of a second, so above 50 the rate
+        # asked for is not the rate played.
+        type=_ranged_int(1, 50),
         default=10,
-        help="GIF frame rate. Lower keeps the file small.",
+        help="GIF frame rate. Lower keeps the file small. With --every 3 over "
+        "the 15 fps clip, 10 plays it back at twice real time.",
     )
     p.add_argument(
         "--width",
-        type=int,
+        type=_ranged_int(2),
         default=480,
         help="Output width; height follows the aspect. The mp4 is "
         "there for detail; this is a README figure and its size "
@@ -63,14 +100,16 @@ def main() -> None:
     )
     p.add_argument(
         "--every",
-        type=int,
-        default=2,
+        type=_ranged_int(1),
+        # 3, the value the committed GIF was built with: at the old default of
+        # 2, the documented command did not reproduce the README's figure.
+        default=3,
         help="Keep one frame in N. A GIF of every frame of a 90-frame "
         "clip is several megabytes for no extra information.",
     )
     p.add_argument(
         "--colours",
-        type=int,
+        type=_ranged_int(2, 256),
         default=32,
         help="Palette size. GIF is indexed, so unquantised truecolour "
         "frames make Pillow choose a palette per frame and the file "
@@ -80,14 +119,20 @@ def main() -> None:
     )
     p.add_argument(
         "--expected-source-sha256",
+        type=_sha256_arg,
         default=None,
         help="Refuse to run unless track_out.mp4 has this digest. Take "
         "it from `output.sha256` in reports/tracking.json - that is "
         "what ties this GIF to a particular tracking run.",
     )
-    args = p.parse_args()
+    return p
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     import cv2
+    import PIL
     from PIL import Image
 
     if not args.source.is_file():
@@ -105,6 +150,7 @@ def main() -> None:
     try:
         if not cap.isOpened():
             raise SystemExit(f"cannot decode {args.source}")
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
         frames, i = [], 0
         while True:
             ok, frame = cap.read()
@@ -163,12 +209,17 @@ def main() -> None:
                     "frames": len(frames),
                     "fps": args.fps,
                     "width": args.width,
+                    # Everything else that decides the bytes, so the GIF can
+                    # be rebuilt rather than only recognised.
+                    "colours": args.colours,
+                    "pillow": PIL.__version__,
                 },
                 "source": {
                     "path": args.source.name,
                     "sha256": digest,
                     "kept_every": args.every,
                     "source_frames": i,
+                    "source_fps": source_fps,
                 },
             },
             indent=2,

@@ -12,8 +12,12 @@ PyTorch (eager) and ONNX Runtime (GPU and CPU).
 Measurement notes (these are the parts that are easy to get wrong):
   * GPU work is asynchronous -- torch.cuda.synchronize() is required before
     stopping the clock, otherwise you time the kernel *launch*, not the kernel.
-  * The first N iterations are discarded. cuDNN autotunes its algorithm choice
-    on first call, so including warmup understates steady-state throughput.
+  * The first N iterations are discarded: first calls pay for lazy
+    initialisation and, in ONNX Runtime, cuDNN's algorithm search (its CUDA
+    provider defaults to an EXHAUSTIVE search). PyTorch runs with its default,
+    torch.backends.cudnn.benchmark=False, which picks algorithms heuristically
+    and does not search. Both settings are recorded in the report's
+    environment; the eager-vs-ONNX ratio includes that difference.
   * Median and p95 are reported rather than the mean. Latency distributions are
     right-skewed, and for a real-time system the tail is what breaks the budget,
     not the average.
@@ -124,6 +128,111 @@ def _map_tolerance(value) -> float:
     return parsed
 
 
+def _map_tolerance_arg(value) -> float:
+    """argparse's face of _map_tolerance. argparse shows its own "invalid
+    _map_tolerance value" for a ValueError, dropping the explanation and
+    naming a private function; an ArgumentTypeError's message is shown as is."""
+    try:
+        return _map_tolerance(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _imgsz(value) -> int:
+    """A positive multiple of 32, or an error now.
+
+    Ultralytics rounds anything else up with a warning - 1000 became a 1024
+    graph - while the cache name and manifest recorded 1000, and the dummy
+    input built at 1000 was then refused by ONNX Runtime with INVALID_ARGUMENT,
+    after both full .val() passes.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"imgsz must be an integer, got {value!r}") from exc
+    if n <= 0 or n % 32:
+        raise ValueError(f"imgsz must be a positive multiple of 32, got {value!r}")
+    return n
+
+
+def _imgsz_arg(value) -> int:
+    try:
+        return _imgsz(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def accuracy_delta(pytorch: dict, onnx: dict, tolerance: float) -> dict:
+    """ONNX minus PyTorch mAP, refused beyond `tolerance` in EITHER direction.
+
+    The abs() is the point: an export that loses accuracy is exactly what this
+    gate is for, and a one-sided check would pass it. Separate from run_one so
+    it is testable without a GPU.
+    """
+    d50 = onnx["mAP50"] - pytorch["mAP50"]
+    d95 = onnx["mAP50_95"] - pytorch["mAP50_95"]
+    if max(abs(d50), abs(d95)) > tolerance:
+        raise SystemExit(
+            f"ONNX accuracy differs from PyTorch by more than {tolerance}: "
+            f"mAP50 {d50:+.4f}, mAP50-95 {d95:+.4f}. An export that changes the "
+            f"model is not a deployment artefact -- investigate before publishing "
+            f"latency for it."
+        )
+    return {"mAP50": round(d50, 4), "mAP50_95": round(d95, 4), "tolerance": tolerance}
+
+
+def placement_from_events(events: list[dict]) -> dict:
+    """Node counts per provider from an ONNX Runtime profile trace."""
+    import collections
+
+    counts = collections.Counter(
+        e["args"]["provider"]
+        for e in events
+        if e.get("cat") == "Node" and "provider" in e.get("args", {})
+    )
+    total = sum(counts.values())
+    return {
+        "nodes_total": total,
+        "by_provider": dict(counts),
+        "cpu_fallback_nodes": counts.get("CPUExecutionProvider", 0),
+        "all_on_cuda": total > 0 and counts.get("CPUExecutionProvider", 0) == 0,
+    }
+
+
+def onnx_cache_path(
+    weights: Path, imgsz: int, half: bool, cache_dir: Path | None = None
+) -> Path:
+    """Where the exported graph for these inputs lives.
+
+    weights.stem, not a hardcoded "best": otherwise last.pt after best.pt at the
+    same imgsz finds best_<imgsz>.onnx, skips the export, and benchmarks one
+    checkpoint's latency beside another's accuracy. The precision is in the
+    name as well as in the manifest, so an FP16 and an FP32 run do not take
+    turns overwriting one file and re-exporting every time.
+    """
+    suffix = "_fp16" if half else ""
+    return (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}{suffix}.onnx"
+
+
+def speedup_pct(new_ms: float, reference_ms: float) -> float:
+    """How much faster `new_ms` is than `reference_ms`, in percent."""
+    return round(100 * (1 - new_ms / reference_ms), 1)
+
+
+def _graph_has_fp16(onnx_path: Path) -> bool:
+    """Does the graph actually hold FP16 weights?
+
+    Ultralytics' FP16 conversion logs a warning on failure and saves the FP32
+    graph, reporting export success - and with keep_io_types the input dtype is
+    the same either way. Without this, that graph is benchmarked and published
+    as FP16, passing the accuracy gate precisely because nothing changed.
+    """
+    import onnx
+
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    return any(t.data_type == onnx.TensorProto.FLOAT16 for t in model.graph.initializer)
+
+
 def _validated_map(name: str, value) -> float:
     """Return one mAP value, refusing a broken evaluation result.
 
@@ -184,7 +293,9 @@ def bench_pytorch(weights: Path, imgsz: int, device: str = "cuda") -> dict:
     from ultralytics import YOLO
 
     model = YOLO(str(weights)).model.fuse().eval().to(device)
-    cuda = device == "cuda"
+    # By type, not string equality: "cuda:0" is CUDA too, and skipped the
+    # synchronize, timing kernel launches rather than kernels.
+    cuda = torch.device(device).type == "cuda"
 
     def run(fn) -> dict:
         with torch.no_grad():
@@ -306,7 +417,6 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     measurement. Run once, outside the timed loops, and recorded in
     benchmark.json so the claim in the README has something behind it.
     """
-    import collections
     import json as _json
 
     import onnxruntime as ort
@@ -329,18 +439,7 @@ def verify_cuda_placement(onnx_path: Path, imgsz: int) -> dict:
     finally:
         trace.unlink(missing_ok=True)
 
-    counts = collections.Counter(
-        e["args"]["provider"]
-        for e in events
-        if e.get("cat") == "Node" and "provider" in e.get("args", {})
-    )
-    total = sum(counts.values())
-    return {
-        "nodes_total": total,
-        "by_provider": dict(counts),
-        "cpu_fallback_nodes": counts.get("CPUExecutionProvider", 0),
-        "all_on_cuda": total > 0 and counts.get("CPUExecutionProvider", 0) == 0,
-    }
+    return placement_from_events(events)
 
 
 def onnx_cuda_runnable(cuda_device: bool, providers: list[str]) -> bool:
@@ -410,6 +509,14 @@ def check_placement(placement: dict, allow_cpu_fallback: bool = False) -> None:
     )
 
 
+def _physical_cores() -> int | None:
+    try:
+        import psutil  # an ultralytics dependency
+    except ImportError:
+        return None
+    return psutil.cpu_count(logical=False)
+
+
 def _environment(imgsz: int) -> dict:
     """What a latency figure needs alongside it to mean anything.
 
@@ -426,6 +533,14 @@ def _environment(imgsz: int) -> dict:
         "cpu": platform.processor(),
         "logical_cpu_count": os.cpu_count(),
         "ort_intra_op_num_threads": ort.SessionOptions().intra_op_num_threads,
+        # 0 is ORT's placeholder, not a thread count: it means one intra-op
+        # thread per physical core, which logical_cpu_count does not tell you.
+        "ort_intra_op_num_threads_note": "0 = ORT default, one thread per physical core",
+        "physical_cpu_count": _physical_cores(),
+        # The two backends search for convolution algorithms differently, and
+        # the eager-vs-ONNX ratio includes that difference.
+        "torch_cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "ort_cudnn_conv_algo_search": "EXHAUSTIVE (ORT CUDA provider default)",
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "cuda": torch.version.cuda,
         "cudnn": torch.backends.cudnn.version(),
@@ -516,8 +631,9 @@ def _export_manifest(
 
     A weights digest alone was not enough. It catches a changed checkpoint, but
     not a re-run at a different --imgsz, a different opset, simplify toggled, or
-    an ultralytics/onnx/onnxslim upgrade that emits a different graph from the
-    same inputs. Any of those produce a stale cache hit that benchmarks one
+    an upgrade of the toolchain (ultralytics, onnx, onnxslim, torch's exporter,
+    onnxruntime's FP16 converter) that emits a different graph from the same
+    inputs. Any of those produce a stale cache hit that benchmarks one
     model and reports another's accuracy.
     """
     # importlib.metadata rather than importing the packages: this function is
@@ -548,6 +664,13 @@ def _export_manifest(
         "ultralytics": installed("ultralytics"),
         "onnx": installed("onnx"),
         "onnxslim": installed("onnxslim"),
+        # torch.onnx.export produces the graph and onnxruntime's float16 module
+        # converts it for --half, so an upgrade of either can change the output
+        # from the same inputs. The two ORT distributions are recorded apart:
+        # both can be installed at once, and which is which matters.
+        "torch": installed("torch"),
+        "onnxruntime": installed("onnxruntime"),
+        "onnxruntime_gpu": installed("onnxruntime-gpu"),
     }
 
 
@@ -567,7 +690,9 @@ def _export_is_current(
         return False
     try:
         recorded = json.loads(stamp.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (OSError, ValueError):
+        # ValueError covers both a malformed JSON stamp and one that is not
+        # UTF-8 at all; either way it cannot vouch for the graph.
         return False
     return recorded == _export_manifest(onnx_path, weights, imgsz, half)
 
@@ -591,6 +716,7 @@ def run_one(
     precision cost".
     """
     map_tolerance = _map_tolerance(map_tolerance)
+    imgsz = _imgsz(imgsz)
 
     import onnxruntime as ort
     import torch
@@ -635,20 +761,11 @@ def run_one(
     else:
         print("  PyTorch  CUDA : skipped (no CUDA device on this machine)")
 
-    # weights.stem, not a hardcoded "best": otherwise running against last.pt
-    # after best.pt at the same imgsz finds best_<imgsz>.onnx already on disk,
-    # skips export, and silently benchmarks best.pt's latency against
-    # last.pt's freshly computed accuracy in the same output row.
     # cache_dir, not weights.parent: the export and its manifest are build
     # artefacts, and writing them beside the checkpoint means the weights mount
     # has to be writable. Defaults to the weights directory so a local run is
-    # unchanged.
-    # The precision is in the filename as well as in the manifest. The manifest
-    # would catch a mismatch on its own, by forcing a re-export -- but into the
-    # same path, so the two precisions would take turns overwriting each other
-    # and every run would export.
-    suffix = "_fp16" if half else ""
-    onnx_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}{suffix}.onnx"
+    # unchanged. Naming is explained on onnx_cache_path.
+    onnx_path = onnx_cache_path(weights, imgsz, half, cache_dir)
     if not _export_is_current(onnx_path, weights, imgsz, half):
         export_onnx(weights, onnx_path, imgsz, half=half)
         # Write the SAME stamp _export_is_current() reads. It wrote
@@ -661,6 +778,17 @@ def run_one(
         )
         # A stamp left by the previous scheme would otherwise sit there forever.
         onnx_path.with_suffix(".onnx.sha256").unlink(missing_ok=True)
+
+    # On a cache hit as well as a fresh export: a graph cached from a failed
+    # conversion would otherwise be found and trusted next time.
+    if half and not _graph_has_fp16(onnx_path):
+        onnx_path.unlink(missing_ok=True)
+        _MANIFEST_STAMP(onnx_path).unlink(missing_ok=True)
+        raise SystemExit(
+            f"{onnx_path} was requested as FP16 but holds no FP16 weights - the "
+            f"conversion failed and Ultralytics saved the FP32 graph. Nothing was "
+            f"written; the graph and its stamp are removed."
+        )
 
     row["onnx_size_mb"] = round(onnx_path.stat().st_size / 1024**2, 2)
     row["export"] = _export_manifest(onnx_path, weights, imgsz, half)
@@ -691,25 +819,15 @@ def run_one(
             "mAP50_95": round(onnx_map95, 4),
         },
     }
-    d50 = row["accuracy"]["onnx"]["mAP50"] - row["accuracy"]["pytorch"]["mAP50"]
-    d95 = row["accuracy"]["onnx"]["mAP50_95"] - row["accuracy"]["pytorch"]["mAP50_95"]
-    row["accuracy"]["delta"] = {
-        "mAP50": round(d50, 4),
-        "mAP50_95": round(d95, 4),
-        "tolerance": map_tolerance,
-    }
     print(
         f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
-        f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}  "
-        f"(delta {d50:+.4f} / {d95:+.4f})"
+        f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}"
     )
-    if max(abs(d50), abs(d95)) > map_tolerance:
-        raise SystemExit(
-            f"ONNX accuracy differs from PyTorch by more than {map_tolerance}: "
-            f"mAP50 {d50:+.4f}, mAP50-95 {d95:+.4f}. An export that changes the "
-            f"model is not a deployment artefact -- investigate before publishing "
-            f"latency for it."
-        )
+    row["accuracy"]["delta"] = accuracy_delta(
+        row["accuracy"]["pytorch"], row["accuracy"]["onnx"], map_tolerance
+    )
+    delta = row["accuracy"]["delta"]
+    print(f"  delta         : {delta['mAP50']:+.4f} / {delta['mAP50_95']:+.4f}")
 
     onnx_cuda = onnx_cuda_runnable(
         torch.cuda.is_available(), ort.get_available_providers()
@@ -738,7 +856,7 @@ def run_one(
     # means something. The export is cached, so this costs a benchmark loop and
     # not a re-export.
     if half and onnx_cuda:
-        fp32_path = (cache_dir or weights.parent) / f"{weights.stem}_{imgsz}.onnx"
+        fp32_path = onnx_cache_path(weights, imgsz, False, cache_dir)
         if not _export_is_current(fp32_path, weights, imgsz, half=False):
             export_onnx(weights, fp32_path, imgsz, half=False)
             _MANIFEST_STAMP(fp32_path).write_text(
@@ -757,12 +875,12 @@ def run_one(
                 "re-validated here; reports/benchmark.json is the FP32 record."
             ),
         }
-        speedup = (
-            1 - row["onnx_cuda"]["core"]["median_ms"] / reference["core"]["median_ms"]
+        speedup = speedup_pct(
+            row["onnx_cuda"]["core"]["median_ms"], reference["core"]["median_ms"]
         )
-        row["fp32_reference"]["core_speedup_pct"] = round(100 * speedup, 1)
+        row["fp32_reference"]["core_speedup_pct"] = speedup
         print(f"  FP32 reference (same session): {reference['core']}")
-        print(f"  FP16 core speedup: {100 * speedup:.1f}%")
+        print(f"  FP16 core speedup: {speedup:.1f}%")
 
     row["environment"] = _environment(imgsz)
     return row
@@ -772,7 +890,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--weights", required=True, type=Path)
     p.add_argument("--data", default="VisDrone.yaml")
-    p.add_argument("--imgsz", type=int, default=1024)
+    p.add_argument("--imgsz", type=_imgsz_arg, default=1024)
     p.add_argument(
         "--device",
         default="0",
@@ -785,7 +903,7 @@ def main() -> None:
     )
     p.add_argument(
         "--map-tolerance",
-        type=_map_tolerance,
+        type=_map_tolerance_arg,
         default=MAP_TOLERANCE,
         help="Fail if ONNX mAP differs from PyTorch by more than "
         "this. An export is meant to change speed, not the model.",

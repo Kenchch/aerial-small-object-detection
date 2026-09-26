@@ -464,6 +464,14 @@ def _with_data_root(data: str, root: Path) -> Path:
     return written
 
 
+def default_out(split: str) -> Path:
+    """reports/evaluation.json for val, reports/evaluation_<split>.json for the
+    rest, so evaluating a second split cannot overwrite the first."""
+    return REPORTS_DIR / (
+        "evaluation.json" if split == "val" else f"evaluation_{split}.json"
+    )
+
+
 def _portable(path_or_name: str | Path) -> str:
     """A repository-relative path, or a bare name for anything outside it.
 
@@ -602,11 +610,7 @@ def main() -> None:
         p.error(f"--weights {args.weights} not found")
 
     if args.out is None:
-        args.out = REPORTS_DIR / (
-            "evaluation.json"
-            if args.split == "val"
-            else f"evaluation_{args.split}.json"
-        )
+        args.out = default_out(args.split)
 
     # Everything downstream reads the resolved spec; only the report names the
     # committed one.

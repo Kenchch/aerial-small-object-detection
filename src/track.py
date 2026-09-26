@@ -370,6 +370,16 @@ def read_source_record(source: Path) -> dict | None:
                 f"src/make_demo_clip.py, or delete it to run without provenance."
             )
         obj(recorded[key], f'"{key}"')
+    # Checked here, not compared later: a missing digest used to be reported as
+    # "describes a clip with None", and a directory source - which has no
+    # digest either - then counted as a match.
+    digest = recorded["clip"].get("sha256")
+    if not (isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise ValueError(
+            f"{stamp}: clip.sha256 is {digest!r}, not a sha256 hex digest. "
+            f"Regenerate it with src/make_demo_clip.py, or delete it to run "
+            f"without provenance."
+        )
     return recorded
 
 
@@ -379,11 +389,15 @@ def _for_report(path: Path) -> str:
     Relative to the project root, and as_posix rather than str(): these reports
     are committed for readers to look at, so neither the absolute path nor the
     path separator of whoever generated it should end up baked into the file.
+    Outside the repository only the name is kept - the same rule as
+    evaluate._portable. It used to return str(path), putting exactly that
+    absolute path into the report; the files' identity is carried by their
+    digests, which the report records beside them.
     """
     resolved = Path(path).resolve()
     if resolved.is_relative_to(PROJECT_ROOT):
         return resolved.relative_to(PROJECT_ROOT).as_posix()
-    return str(path)
+    return resolved.name
 
 
 def natural_key(name: str) -> tuple:
@@ -398,11 +412,18 @@ def natural_key(name: str) -> tuple:
     Digit runs compare as integers, everything else casefolded. The (0, ...) /
     (1, ...) tags keep the key total - two names can put a number and a word at
     the same position, and comparing int with str raises.
+
+    isdecimal, not isdigit: a superscript digit is a "digit" that int() cannot
+    parse, and one in a filename crashed the sort. The name itself is the
+    tie-break, as a separate second element, so names that differ only in case
+    or leading zeros (F2/f2, img_007/img_7) sort the same way whatever order
+    the directory listing returned them in, and no existing order changes.
     """
-    return tuple(
-        (1, int(part), "") if part.isdigit() else (0, 0, part.lower())
+    parts = tuple(
+        (1, int(part), "") if part.isdecimal() else (0, 0, part.lower())
         for part in re.split(r"(\d+)", name)
     )
+    return (parts, name)
 
 
 def frame_source(source: Path):
@@ -705,6 +726,10 @@ def build_report(
         },
         "config": {
             "weights": _for_report(args.weights),
+            # The path says where the weights were, not what they were; a
+            # summary of repeats can only claim "the release checkpoint" if
+            # each run recorded this.
+            "weights_sha256": _sha256(args.weights),
             # None rather than a path when nothing was written, so the
             # report cannot name an output file that does not exist.
             "out": None if args.no_write else _for_report(args.out),
@@ -970,6 +995,11 @@ def main() -> None:
     args = p.parse_args()
     if not args.weights.is_file():
         p.error(f"--weights {args.weights} not found")
+    if not args.no_write and args.out.suffix.lower() != ".mp4":
+        # OpenCV picks the container from the extension and the codec is mp4v;
+        # anything else failed later as an unopenable writer or an undecodable
+        # file, pointing at the codec rather than the name.
+        p.error(f"--out must end in .mp4, got {args.out.name}")
     protected_paths = {
         args.source.resolve(),
         args.weights.resolve(),
@@ -1002,9 +1032,13 @@ def main() -> None:
     # built meant a clip that did not match its record was profiled in full
     # first, and the disagreement appeared at the end of a run that should
     # never have started.
-    source_matches = check_source_matches_record(
-        args.source, args.allow_source_mismatch
-    )
+    try:
+        source_matches = check_source_matches_record(
+            args.source, args.allow_source_mismatch
+        )
+    except ValueError as exc:
+        # A malformed sidecar is the user's file to fix, not a traceback.
+        raise SystemExit(str(exc)) from None
 
     import torch
 
