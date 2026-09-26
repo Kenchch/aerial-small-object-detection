@@ -9,6 +9,7 @@ pure functions and is pinned here with synthetic inputs.
 
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -86,10 +87,11 @@ def test_error_split_skips_classes_with_no_true_instances():
     assert all(np.isfinite(v) for v in got["car"].values() if isinstance(v, float))
 
 
-def test_error_split_reproduces_the_committed_report():
+def test_error_split_layout_is_predicted_by_true():
     """Guards the layout convention (rows=Predicted, cols=True). Transposing it
     still produces plausible-looking numbers that sum to 1, so only a fixed
-    expectation catches it."""
+    expectation catches it. (Synthetic input: this is not the committed
+    report's matrix, whatever the old name of this test said.)"""
     names = {0: "car", 1: "van"}
     cm = _cm([[713, 194, 0], [194, 341, 0], [93, 465, 0]])
     got = error_split(cm, names)
@@ -128,14 +130,28 @@ def test_letterbox_never_upscales_the_short_side_independently():
 
 
 def test_letterbox_area_matches_the_committed_median_box():
-    """reports/evaluation.json records a median box of 11.3 px at 640 and
-    18.0 px at 1024, from a median area of 0.0552% of frame on a 16:9 split."""
+    """The median box side in reports/evaluation.json follows from its median
+    area share by the letterbox geometry - read from the report, not typed in,
+    so a regenerated report is checked rather than a remembered one.
+
+    The derivation is only valid because every val frame is 16:9 (a mixed-
+    aspect split has no single scale), so that premise is asserted first.
+    """
+    ls = json.loads(
+        (Path(__file__).resolve().parents[1] / "reports" / "evaluation.json").read_text(
+            encoding="utf-8"
+        )
+    )["label_scale"]
+    for dims in ls["source_dims_seen"]:
+        w, h = map(int, dims.split("x"))
+        assert w * 9 == pytest.approx(h * 16, rel=1e-2), dims
+
     W, H = 1920, 1080
-    area_frac = 0.000552
-    for imgsz, expected_side in ((640, 11.3), (1024, 18.0)):
+    area_frac = ls["median_box_area_pct_of_frame"] / 100
+    for imgsz, key in ((640, "at_640"), (1024, "at_1024")):
         s = letterbox_scale(W, H, imgsz)
         px_area = (np.sqrt(area_frac) * W * s) * (np.sqrt(area_frac) * H * s)
-        assert np.sqrt(px_area) == pytest.approx(expected_side, abs=0.1)
+        assert np.sqrt(px_area) == pytest.approx(ls["median_box_side_px"][key], abs=0.1)
 
 
 # --- association remainder --------------------------------------------------- #
@@ -240,6 +256,10 @@ def test_an_unchanged_export_is_reused(tmp_path):
         "ultralytics",
         "onnx",
         "onnxslim",
+        "half",
+        "torch",
+        "onnxruntime",
+        "onnxruntime_gpu",
     ],
 )
 def test_any_manifest_field_changing_invalidates_the_cache(tmp_path, field):
@@ -282,6 +302,32 @@ def test_a_missing_or_unreadable_stamp_forces_a_re_export(tmp_path):
 
     benchmark._MANIFEST_STAMP(onnx).write_text("{not json", encoding="utf-8")
     assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+    # Not UTF-8 at all - a torn write. UnicodeDecodeError is not a
+    # JSONDecodeError, and escaped the old handler as a crash.
+    benchmark._MANIFEST_STAMP(onnx).write_bytes(b"\xff\xfe{}")
+    assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+
+def test_retraining_invalidates_the_cache(tmp_path):
+    """Driven by the real input, not by editing the stamp: the weights change,
+    so the digest the manifest is computed from changes."""
+    weights, onnx = _stub_export(tmp_path)
+    _write_stamp(onnx, weights, 1024)
+    assert benchmark._export_is_current(onnx, weights, 1024) is True
+
+    weights.write_bytes(b"retrained")
+    assert benchmark._export_is_current(onnx, weights, 1024) is False
+
+
+def test_precision_is_part_of_the_cache_key(tmp_path):
+    weights, onnx = _stub_export(tmp_path)
+    benchmark._MANIFEST_STAMP(onnx).write_text(
+        json.dumps(benchmark._export_manifest(onnx, weights, 1024, half=True)),
+        encoding="utf-8",
+    )
+    assert benchmark._export_is_current(onnx, weights, 1024, half=True) is True
+    assert benchmark._export_is_current(onnx, weights, 1024, half=False) is False
 
 
 def test_export_writes_nothing_into_the_weights_directory(tmp_path):

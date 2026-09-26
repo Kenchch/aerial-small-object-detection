@@ -7,7 +7,7 @@
     90,
     90
   ],
-  "protocol": "Five separate Python processes; decode, inference, annotation and encoding enabled. Wall time includes model warm-up within tracking; steady_state_* sums per-stage medians and so excludes it. Same 90-frame synthetic pan source and release v1.0 checkpoint.",
+  "protocol": "Five separate Python processes; decode, inference, annotation and encoding enabled. Wall time includes model warm-up within tracking; steady_state_* sums per-stage medians and so excludes it. Same 90-frame source (sha256 ef545c205123) and checkpoint runs/n_1024/weights/best.pt (digest not recorded).",
   "statistics": {
     "wall_seconds": {
       "median": 10.66,

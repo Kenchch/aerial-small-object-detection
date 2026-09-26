@@ -60,6 +60,22 @@ def test_zero_padding_and_case_do_not_change_the_order():
     assert sorted(["F2.jpg", "f1.jpg"], key=natural_key) == ["f1.jpg", "F2.jpg"]
 
 
+@pytest.mark.parametrize("names", [["img_007.png", "img_7.png"], ["F2.jpg", "f2.jpg"]])
+def test_equal_keys_sort_the_same_whatever_the_listing_order(names):
+    """These compare equal part by part, so their order came from iterdir."""
+    first, second = names
+    # sorted() is stable, so equal keys keep their input order; both orders
+    # must give one result.
+    assert sorted([first, second], key=natural_key) == sorted(
+        [second, first], key=natural_key
+    )
+
+
+def test_a_superscript_digit_does_not_crash_the_sort():
+    """isdigit() is true for '²' and int('²') raises; isdecimal() is false."""
+    assert sorted(["1\u00b22.jpg", "12.jpg"], key=natural_key)
+
+
 # --- report paths ----------------------------------------------------------- #
 
 
@@ -69,6 +85,27 @@ def test_report_paths_are_repo_relative_and_posix():
     inside = track.PROJECT_ROOT / "reports" / "track_out.mp4"
     assert track._for_report(inside) == "reports/track_out.mp4"
     assert chr(92) not in track._for_report(inside)
+
+
+def test_a_path_outside_the_repo_keeps_only_its_name(tmp_path):
+    """It was written as given: an absolute path, with this machine's layout."""
+    assert track._for_report(tmp_path / "VisDrone" / "clip.mp4") == "clip.mp4"
+
+
+def test_multi_gpu_and_unparseable_device_strings():
+    assert track.resolve_device("0,1", True, _names) == (
+        "cuda:0",
+        "NVIDIA GeForce RTX 2070 with Max-Q Design",
+    )
+    assert track.resolve_device("cuda:x", True, _names) == ("cuda:x", None)
+
+
+def test_an_output_with_extra_frames_is_refused():
+    """The short direction was tested; a file with MORE frames than were
+    processed is as wrong, and was not."""
+    probe = track.probe_video(Path("x"), open_capture=lambda _: _Cap(_fake_frames(93)))
+    with pytest.raises(SystemExit, match="processed 90, file has 93"):
+        track.check_output(probe, frames=90, width=8, height=4, name="o.mp4")
 
 
 # --- source provenance ------------------------------------------------------ #
@@ -140,6 +177,9 @@ def test_a_clip_with_no_record_still_carries_its_digest(tmp_path):
         ('{"clip": {}}', 'missing "generator"'),
         ('{"clip": "not an object", "generator": {}}', '"clip" must be a JSON object'),
         ('{"clip": {}, "generator": []}', '"generator" must be a JSON object'),
+        # No digest, or not a digest: was "describes a clip with None".
+        ('{"clip": {}, "generator": {}}', "not a sha256 hex digest"),
+        ('{"clip": {"sha256": "ABC"}, "generator": {}}', "not a sha256 hex digest"),
     ],
 )
 def test_a_malformed_record_is_refused_before_any_inference(tmp_path, body, match):
@@ -641,6 +681,35 @@ def test_successful_main_publishes_custom_report(tmp_path, monkeypatch):
     evidence = json.loads(report.read_text())
     assert evidence["output"]["frames"] == 4
     assert not report.with_suffix(".json.tmp").exists()
+
+
+def test_an_output_that_is_not_mp4_is_refused_up_front(tmp_path, monkeypatch, capsys):
+    import sys
+
+    _run(monkeypatch, tmp_path, frames_in=3, frames_back=3)
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--out", str(tmp_path / "o.avi")])
+    with pytest.raises(SystemExit):
+        track.main()
+    assert "--out must end in .mp4" in capsys.readouterr().err
+
+
+def test_a_malformed_sidecar_is_a_message_not_a_traceback(tmp_path, monkeypatch):
+    source, _, _ = _run(monkeypatch, tmp_path, frames_in=3, frames_back=3)
+    source.with_suffix(".provenance.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(SystemExit, match="top level must be a JSON object"):
+        track.main()
+
+
+def test_the_report_records_the_checkpoint_digest(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+
+    _run(monkeypatch, tmp_path, frames_in=4, frames_back=4)
+    report = tmp_path / "r.json"
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--report", str(report)])
+    track.main()
+    recorded = json.loads(report.read_text())["config"]["weights_sha256"]
+    assert recorded == hashlib.sha256(b"a checkpoint").hexdigest()
 
 
 def test_a_missing_checkpoint_is_refused_before_anything_runs(

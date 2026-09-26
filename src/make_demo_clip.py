@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 # Read when ultralytics is imported, so set before anything can import it: no
@@ -187,10 +188,43 @@ def densest_val_image() -> tuple[Path, int]:
     return best, best_n
 
 
-def main() -> None:
+def _ranged_int(lo: int, hi: int | None = None):
+    """An argparse type: an int in [lo, hi], refused at parse time.
+
+    Unchecked, a bad value either failed after the whole clip had been read,
+    with a traceback about something else, or was accepted silently and then
+    written into the provenance record as if it meant something.
+    """
+
+    def parse(value):
+        try:
+            n = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
+        if n < lo or (hi is not None and n > hi):
+            bound = f">= {lo}" if hi is None else f"in [{lo}, {hi}]"
+            raise argparse.ArgumentTypeError(f"must be {bound}, got {n}")
+        return n
+
+    return parse
+
+
+def _sha256_arg(value: str) -> str:
+    """A sha256 digest as argparse input: trimmed, lower-cased, and checked.
+
+    Compared as typed, the same digest pasted in upper case or with a trailing
+    space was reported as a different frame or a different run.
+    """
+    digest = value.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise argparse.ArgumentTypeError(f"not a sha256 hex digest: {value!r}")
+    return digest
+
+
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
-    p.add_argument("--frames", type=int, default=90)
-    p.add_argument("--fps", type=int, default=15)
+    p.add_argument("--frames", type=_ranged_int(1), default=90)
+    p.add_argument("--fps", type=_ranged_int(1, 240), default=15)
     p.add_argument(
         "--out", type=Path, default=PROJECT_ROOT / "reports" / "demo_pan.mp4"
     )
@@ -206,6 +240,7 @@ def main() -> None:
     )
     p.add_argument(
         "--expected-source-sha256",
+        type=_sha256_arg,
         default=None,
         help="Refuse to run unless the source frame has this digest. "
         "Pair it with --source-image to reproduce a published clip "
@@ -213,6 +248,7 @@ def main() -> None:
     )
     p.add_argument(
         "--expected-clip-sha256",
+        type=_sha256_arg,
         default=None,
         help="Refuse to publish the result unless the finished mp4 has "
         "this digest. Without it the sidecar is written from the "
@@ -221,6 +257,7 @@ def main() -> None:
     )
     p.add_argument(
         "--expected-decoded-frames-sha256",
+        type=_sha256_arg,
         default=None,
         help="Same, over the frames DECODED BACK from the finished "
         "file. Independent of how the container was muxed, and "
@@ -229,6 +266,7 @@ def main() -> None:
     )
     p.add_argument(
         "--expected-pre-encode-frames-sha256",
+        type=_sha256_arg,
         default=None,
         help="Same, over the frames handed TO the encoder. This one "
         "is codec-independent: it says the generator produced the "
@@ -242,7 +280,18 @@ def main() -> None:
         "means more apparent motion and more objects entering "
         "and leaving — a harder association test.",
     )
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
+    if not 0 < args.crop <= 1:
+        p.error(f"--crop must be in (0, 1], got {args.crop}")
+    if args.out.suffix.lower() != ".mp4":
+        # OpenCV picks the container from the extension; anything else failed
+        # later as a writer that would not open, blamed on the codec.
+        p.error(f"--out must end in .mp4, got {args.out.name}")
 
     import cv2
     import numpy as np
@@ -293,6 +342,11 @@ def main() -> None:
     cw, ch = int(W * args.crop), int(H * args.crop)
     # Even output dimensions keep the H.264/mp4v encoder happy.
     ow, oh = cw - (cw % 2), ch - (ch % 2)
+    if ow < 2 or oh < 2:
+        raise SystemExit(
+            f"--crop {args.crop} of a {W}x{H} frame is {ow}x{oh} px, too small "
+            f"to encode"
+        )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
 

@@ -14,6 +14,8 @@ chosen, rather than assumed.
 
 ![Object detection and tracking pipeline demonstration](../reports/tracking_demo.gif)
 
+*Every 3rd frame of the 15 fps clip, played at 10 fps - twice real time.*
+
 This clip pans across a single real image to demonstrate the processing
 pipeline. The camera motion is synthetic; it does not demonstrate tracking
 accuracy on independently moving objects.
@@ -257,7 +259,11 @@ inference on a GPU-equipped edge device rather than falling back to CPU.
 
 Median of 100 timed iterations after 20 warmup, with `torch.cuda.synchronize()`
 before each stop — GPU work is asynchronous, so timing without it measures
-kernel *launch*, not the kernel. The full environment is recorded in
+kernel *launch*, not the kernel. Each backend runs with its default cuDNN
+algorithm selection: ONNX Runtime's CUDA provider searches exhaustively on
+first use, while PyTorch's `cudnn.benchmark` is off, choosing heuristically.
+The eager-vs-ONNX ratio includes that difference; how much of it is not
+measured here. The full environment is recorded in
 `reports/benchmark.json` alongside the numbers:
 
 ```
@@ -268,9 +274,11 @@ onnxruntime-gpu 1.20.2 · imgsz 1024 · batch 1 · 20 warmup / 100 timed
 **The export is validated, not assumed.** Latency beside a PyTorch mAP
 invites the reader to take it that ONNX kept the accuracy, which is an
 assumption: opset choice, constant folding and precision can all move it.
-Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds MAP_TOLERANCE, 0.002. The `.onnx` also carries the
-sha256 of the checkpoint it came from, so retraining forces a re-export
-rather than benchmarking yesterday's graph against today's weights.
+Both backends are validated on the same split — PyTorch mAP50 0.3748 / mAP50-95 0.2216, ONNX 0.3752 / 0.2223, a delta of +0.0004 / +0.0007 — and the run fails if it exceeds MAP_TOLERANCE, 0.002. The export's manifest
+(`<graph>.onnx.manifest.json`, beside the graph - the `.onnx` itself does not
+carry it) records the sha256 of the checkpoint it came from, so retraining
+forces a re-export rather than benchmarking yesterday's graph against today's
+weights.
 
 The GPU path is genuine CUDA execution, and that is measured rather than
 inferred. `sess.get_providers()` only reports which providers the session
