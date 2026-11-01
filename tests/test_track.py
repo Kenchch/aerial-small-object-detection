@@ -322,10 +322,17 @@ def test_a_clip_that_does_not_match_its_record_stops_the_run(tmp_path):
         track.check_source_matches_record(clip)
 
 
-def test_the_mismatch_can_be_opted_into_explicitly(tmp_path):
-    """Analysing a different input is legitimate; doing it silently is not."""
+def test_the_mismatch_can_be_opted_into_explicitly(tmp_path, capsys):
+    """Analysing a different input is legitimate; doing it silently is not.
+
+    The warning goes to stderr, so it still reaches the terminal when the
+    printed results are redirected to a file.
+    """
     clip = _clip_with_record(tmp_path, b"a different clip", recorded_sha="0" * 64)
     assert track.check_source_matches_record(clip, allow_mismatch=True) is False
+    out, err = capsys.readouterr()
+    assert "does not match its provenance record" in err
+    assert "[warn]" not in out
 
 
 # --- the output video is evidence too --------------------------------------- #
