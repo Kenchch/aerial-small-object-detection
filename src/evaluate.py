@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -261,7 +262,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     names = dataset["names"]  # normalised to {index: name} by check_det_dataset
     files = sorted(label_dir.glob("*.txt"))
     if not files:
-        print(f"\n[warn] no label files under {label_dir}")
+        print(f"\n[warn] no label files under {label_dir}", file=sys.stderr)
         return {}
 
     # Case-insensitive, so a frame saved as .JPG is not silently left out of
@@ -312,7 +313,8 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         # an all-background split, or all lines shorter than 5 fields).
         print(
             f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
-            f"but none contained a valid box -- nothing to summarise."
+            f"but none contained a valid box -- nothing to summarise.",
+            file=sys.stderr,
         )
         return {}
 
@@ -324,7 +326,8 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     if 0 < sized < len(areas):
         print(
             f"\n[warn] {len(areas) - sized} of {len(areas)} boxes have no readable "
-            f"source image; the scale shares and pixel medians use only {sized}."
+            f"source image; the scale shares and pixel medians use only {sized}.",
+            file=sys.stderr,
         )
 
     areas = np.asarray(areas)
@@ -373,7 +376,8 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     else:
         print(
             "\n  [warn] could not resolve source images -- skipping pixel "
-            "conversion (frame-area stats above are unaffected)."
+            "conversion (frame-area stats above are unaffected).",
+            file=sys.stderr,
         )
     print("     This is the argument for training at higher resolution.")
 

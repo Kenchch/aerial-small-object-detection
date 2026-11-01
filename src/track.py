@@ -24,6 +24,7 @@ import json
 import os
 import re
 import statistics
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -317,7 +318,8 @@ def check_source_matches_record(source: Path, allow_mismatch: bool = False) -> b
         print(
             f"[warn] {source.name} does not match its provenance record "
             f"({actual[:16]}... vs {expected}). Continuing because "
-            f"--allow-source-mismatch was passed; the report will say so."
+            f"--allow-source-mismatch was passed; the report will say so.",
+            file=sys.stderr,
         )
         return False
     raise SystemExit(
@@ -469,7 +471,8 @@ def frame_source(source: Path):
         if skipped:
             print(
                 f"[warn] skipped {len(skipped)} undecodable image(s): "
-                f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}"
+                f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}",
+                file=sys.stderr,
             )
     else:
         cap = cv2.VideoCapture(str(source))
