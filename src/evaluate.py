@@ -527,7 +527,7 @@ def _provenance(
     import ultralytics
 
     common = {
-        "run_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+        "run_date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d"),
         "split": SPLIT_DESCRIPTIONS.get(split, split),
         "data": _portable(data),
         "imgsz": imgsz,
@@ -548,7 +548,7 @@ def _provenance(
     first = requested.split(",")[0].strip().removeprefix("cuda:")
     index = int(first) if first.isdigit() else 0
     provenance = {
-        "run_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+        "run_date": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d"),
         "checkpoint_sha256": digest,
         "split": SPLIT_DESCRIPTIONS.get(split, split),
         "data": _portable(data),
