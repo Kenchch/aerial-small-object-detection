@@ -36,9 +36,12 @@ Usage
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 from pathlib import Path
+
+import logs
 
 # Read when ultralytics is imported, so set before anything can import it: no
 # pip installs at run time. See benchmark.py.
@@ -53,6 +56,8 @@ CAP_PROP_FPS = 5
 # environment, which makes the CLI undiscoverable exactly when someone is
 # trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+log = logging.getLogger("aerial.make_demo_clip")
 
 
 def sha256(path: Path) -> str:
@@ -292,7 +297,11 @@ def main() -> None:
         # OpenCV picks the container from the extension; anything else failed
         # later as a writer that would not open, blamed on the codec.
         p.error(f"--out must end in .mp4, got {args.out.name}")
+    with logs.command("make_demo_clip"):
+        _make_clip(args)
 
+
+def _make_clip(args) -> None:
     import cv2
     import numpy as np
 
@@ -496,6 +505,10 @@ def main() -> None:
         json.dumps(provenance, indent=2), encoding="utf-8"
     )
 
+    log.info(
+        f"clip written: {logs.rel(args.out)} ({args.frames} frames @ {args.fps} fps, "
+        f"{ow}x{oh}), sha256 {clip_sha}"
+    )
     print(f"wrote  : {args.out}  ({args.frames} frames @ {args.fps} fps, {ow}x{oh})")
     print(f"         {provenance_path(args.out).name}")
     print(f"clip   : sha256 {clip_sha}")

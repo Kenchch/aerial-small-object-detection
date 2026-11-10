@@ -15,8 +15,11 @@ Usage
 """
 
 import argparse
+import logging
 import os
 from pathlib import Path
+
+import logs
 
 # Read when ultralytics is imported, so set before anything can import it: no
 # pip installs at run time. (ULTRALYTICS_SAFE_LOAD is not defaulted here, as it
@@ -30,6 +33,8 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "false")
 # trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = PROJECT_ROOT / "runs"
+
+log = logging.getLogger("aerial.train")
 
 # The fresh-run defaults. The flags below default to None instead, so a resume
 # can tell "given on the command line" from "left at the default" and forward
@@ -212,7 +217,7 @@ def resume(args, load_checkpoint=None, yolo=None):
     if yolo is None:  # pragma: no cover - exercised by a real run
         from ultralytics import YOLO as yolo
 
-    print(f"resuming from {last}")
+    log.info(f"resuming from {logs.rel(last)}")
     return yolo(str(last)).train(
         resume=True,
         data=args.data or recorded,
@@ -223,10 +228,15 @@ def resume(args, load_checkpoint=None, yolo=None):
 
 def main() -> None:
     args = parse_args()
+    with logs.command("train"):
+        _train(args)
 
+
+def _train(args) -> None:
     if args.resume:
         results = resume(args)
         mAP, _ = _headline(results)
+        log.info(f"run {args.name}: resumed run complete, mAP50-95 {mAP}")
         print(f"\n=== RESUMED RUN COMPLETE ===\nmAP50-95 : {mAP}")
         return
 
@@ -245,6 +255,10 @@ def main() -> None:
 
     from ultralytics import YOLO
 
+    log.info(
+        f"run {args.name}: {args.model} at imgsz {args.imgsz}, {args.epochs} epochs, "
+        f"batch {args.batch}, seed {args.seed}, device {args.device}"
+    )
     model = YOLO(args.model)
 
     results = model.train(
@@ -280,6 +294,7 @@ def main() -> None:
     print("\n=== TRAINING COMPLETE ===")
     print(f"run       : {args.name}  (imgsz={args.imgsz})")
     mAP, mAP50 = _headline(results)
+    log.info(f"run {args.name}: training complete, mAP50-95 {mAP}, mAP50 {mAP50}")
     print(f"mAP50-95  : {mAP}")
     print(f"mAP50     : {mAP50}")
     print(f"weights   : {RUNS_DIR / args.name / 'weights' / 'best.pt'}")

@@ -20,7 +20,8 @@ runs/smoketest/
 # Augmentation mosaics, ~0.5 MB each.
 train_batch*.jpg
 
-# Raw console logs (ANSI progress-bar spam), pid files, checkpoint backups.
+# The run log every script appends to (runs/aerial.log, see src/logs.py), raw
+# console logs (ANSI progress-bar spam), pid files, checkpoint backups.
 *.log
 *.err
 *.pid

@@ -25,10 +25,15 @@ Usage
 import argparse
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 
+import logs
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+log = logging.getLogger("aerial.make_demo_gif")
 
 
 def sha256(path: Path) -> str:
@@ -130,7 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    with logs.command("make_demo_gif"):
+        _make_gif(args)
 
+
+def _make_gif(args) -> None:
     import cv2
     import PIL
     from PIL import Image
@@ -225,6 +234,10 @@ def main() -> None:
             indent=2,
         ),
         encoding="utf-8",
+    )
+    log.info(
+        f"gif written: {logs.rel(args.out)} ({len(frames)} of {i} frames @ {args.fps} fps), "
+        f"from {args.source.name} sha256 {digest}"
     )
     print(f"wrote {args.out}  ({len(frames)} of {i} frames @ {args.fps} fps)")
     print(f"from  {args.source.name}  sha256 {digest}")

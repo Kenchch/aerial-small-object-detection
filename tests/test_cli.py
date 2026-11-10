@@ -24,7 +24,8 @@ from pathlib import Path
 import pytest
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
-SCRIPTS = sorted(SRC_DIR.glob("*.py"))
+# logs.py is the module the scripts share, not a script: it has no --help.
+SCRIPTS = sorted(p for p in SRC_DIR.glob("*.py") if p.name != "logs.py")
 BLOCKED = ("torch", "torchvision", "ultralytics", "cv2")
 
 _SITECUSTOMIZE = textwrap.dedent(f"""
@@ -45,7 +46,13 @@ def bare_env(tmp_path_factory):
     """An environment whose sitecustomize makes the heavy deps unimportable."""
     d = tmp_path_factory.mktemp("bare")
     (d / "sitecustomize.py").write_text(_SITECUSTOMIZE, encoding="utf-8")
-    return {"PYTHONPATH": str(d), "PATH": "/usr/bin:/bin", "HOME": str(d)}
+    return {
+        "PYTHONPATH": str(d),
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(d),
+        # The scripts run here would otherwise append to the real runs/aerial.log.
+        "AERIAL_LOG_FILE": str(d / "aerial.log"),
+    }
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
