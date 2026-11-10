@@ -20,12 +20,14 @@ Usage
 
 import argparse
 import json
+import logging
 import os
 import shutil
-import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
+
+import logs
 
 # Read when ultralytics is imported, so set before anything can import it.
 # No run-time pip installs, and checkpoints loaded with torch's weights_only
@@ -39,6 +41,8 @@ os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 # when someone is trying to find out what it needs.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
+
+log = logging.getLogger("aerial.evaluate")
 
 # The operating point the confusion matrix is built at. NOT a free choice: 0.25
 # is what src/track.py deploys at, and what Ultralytics' own ConfusionMatrix
@@ -262,7 +266,7 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     names = dataset["names"]  # normalised to {index: name} by check_det_dataset
     files = sorted(label_dir.glob("*.txt"))
     if not files:
-        print(f"\n[warn] no label files under {label_dir}", file=sys.stderr)
+        log.warning(f"no label files under {label_dir}")
         return {}
 
     # Case-insensitive, so a frame saved as .JPG is not silently left out of
@@ -311,10 +315,9 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
         # instead of saying plainly that no boxes were found -- label files
         # existed (the earlier guard passed) but every one was empty (e.g.
         # an all-background split, or all lines shorter than 5 fields).
-        print(
-            f"\n[warn] {len(files)} label file(s) found under {label_dir}, "
-            f"but none contained a valid box -- nothing to summarise.",
-            file=sys.stderr,
+        log.warning(
+            f"{len(files)} label file(s) found under {label_dir}, "
+            f"but none contained a valid box -- nothing to summarise."
         )
         return {}
 
@@ -324,10 +327,9 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
     # rather than printing "N boxes" over shares computed from a subset.
     sized = len(px_area_640)
     if 0 < sized < len(areas):
-        print(
-            f"\n[warn] {len(areas) - sized} of {len(areas)} boxes have no readable "
-            f"source image; the scale shares and pixel medians use only {sized}.",
-            file=sys.stderr,
+        log.warning(
+            f"{len(areas) - sized} of {len(areas)} boxes have no readable "
+            f"source image; the scale shares and pixel medians use only {sized}."
         )
 
     areas = np.asarray(areas)
@@ -374,10 +376,9 @@ def label_size_distribution(data: str, split: str = "val", imgsz: int = 640) -> 
             f"at {imgsz}px (this project's chosen resolution)."
         )
     else:
-        print(
-            "\n  [warn] could not resolve source images -- skipping pixel "
-            "conversion (frame-area stats above are unaffected).",
-            file=sys.stderr,
+        log.warning(
+            "could not resolve source images -- skipping pixel "
+            "conversion (frame-area stats above are unaffected)."
         )
     print("     This is the argument for training at higher resolution.")
 
@@ -625,6 +626,11 @@ def main() -> None:
     if args.out is None:
         args.out = default_out(args.split)
 
+    with logs.command("evaluate"):
+        _evaluate(args)
+
+
+def _evaluate(args) -> None:
     # Everything downstream reads the resolved spec; only the report names the
     # committed one.
     temp_spec = (
@@ -635,7 +641,8 @@ def main() -> None:
         # Labels first: they need no GPU, and a spec problem found here costs
         # seconds. Found after the two .val() passes, it cost minutes and wrote
         # nothing. An empty result is a failure, not a report with a hole in it.
-        label_scale = label_size_distribution(spec, args.split, args.imgsz)
+        with logs.step(f"label statistics ({args.split})"):
+            label_scale = label_size_distribution(spec, args.split, args.imgsz)
         if not label_scale:
             raise SystemExit(
                 "no labelled boxes found for this split, so there is no "
@@ -685,6 +692,13 @@ def main() -> None:
     # Trailing newline: evaluation_test.json had one and evaluation.json did
     # not, because one was hand-edited and the other written here.
     args.out.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    if accuracy:
+        overall = accuracy["overall"]
+        log.info(
+            f"{args.split} at imgsz {args.imgsz}: mAP50 {overall['mAP50']}, "
+            f"mAP50-95 {overall['mAP50_95']}"
+        )
+    log.info(f"report written: {logs.rel(args.out)}")
     print(f"\n  metrics -> {args.out}")
 
 

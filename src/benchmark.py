@@ -29,6 +29,7 @@ Usage
 
 import argparse
 import json
+import logging
 import math
 import os
 import shutil
@@ -36,6 +37,8 @@ import statistics
 import tempfile
 import time
 from pathlib import Path
+
+import logs
 
 # Both are read when ultralytics is imported, so they are set here, before
 # anything can import it. setdefault, so either can still be overridden.
@@ -54,6 +57,8 @@ os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 # not only used by the torch paths.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = PROJECT_ROOT / "reports"
+
+log = logging.getLogger("aerial.benchmark")
 
 ONNX_OPSET = 13
 # Export flags. Constants because they are BOTH arguments to the export and
@@ -852,6 +857,7 @@ def run_one(
     # command died here with PermissionError. Where these go does not touch any
     # number; in the container they land beside the export cache on /out.
     val_dir = (cache_dir or Path(tempfile.gettempdir())) / "val-runs"
+    log.info(f"PyTorch accuracy: two val passes at imgsz {imgsz} on device {device}")
     headline, pytorch_square = pytorch_accuracy(
         YOLO, weights, data, imgsz, device, val_dir
     )
@@ -864,7 +870,7 @@ def run_one(
         "mAP50_95": round(headline["mAP50_95"], 4),
         "mAP_source": "PyTorch FP32, rect=True (evaluate.py's protocol)",
     }
-    print(f"  mAP50={row['mAP50']}  mAP50-95={row['mAP50_95']}")
+    log.info(f"PyTorch accuracy: mAP50 {row['mAP50']}  mAP50-95 {row['mAP50_95']}")
 
     # --- latency --------------------------------------------------------
     # This specific comparison is CUDA-vs-CUDA-vs-CPU by design (that is the
@@ -873,9 +879,9 @@ def run_one(
     # below is still meaningful there.
     if torch.cuda.is_available():
         row["pytorch_cuda"] = bench_pytorch(weights, imgsz, "cuda")
-        print(f"  PyTorch  CUDA : {row['pytorch_cuda']}")
+        log.info(f"PyTorch  CUDA : {row['pytorch_cuda']}")
     else:
-        print("  PyTorch  CUDA : skipped (no CUDA device on this machine)")
+        log.info("PyTorch  CUDA : skipped (no CUDA device on this machine)")
 
     # cache_dir, not weights.parent: the export and its manifest are build
     # artefacts, and writing them beside the checkpoint means the weights mount
@@ -920,15 +926,15 @@ def run_one(
         "pytorch": {k: round(v, 4) for k, v in pytorch_square.items()},
         "onnx": {k: round(v, 4) for k, v in onnx_map.items()},
     }
-    print(
-        f"  ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
+    log.info(
+        f"ONNX accuracy : mAP50 {row['accuracy']['onnx']['mAP50']} "
         f"mAP50-95 {row['accuracy']['onnx']['mAP50_95']}"
     )
     row["accuracy"]["delta"] = accuracy_delta(
         row["accuracy"]["pytorch"], row["accuracy"]["onnx"], map_tolerance
     )
     delta = row["accuracy"]["delta"]
-    print(f"  delta         : {delta['mAP50']:+.4f} / {delta['mAP50_95']:+.4f}")
+    log.info(f"delta         : {delta['mAP50']:+.4f} / {delta['mAP50_95']:+.4f}")
 
     onnx_cuda = onnx_cuda_runnable(
         torch.cuda.is_available(), ort.get_available_providers()
@@ -937,11 +943,11 @@ def run_one(
         row["onnx_cuda"] = bench_onnx(onnx_path, imgsz, "CUDAExecutionProvider")
         placement = verify_cuda_placement(onnx_path, imgsz)
         row["onnx_cuda_placement"] = placement
-        print(f"  ONNX node placement: {placement}")
-        print(f"  ONNXRuntime GPU: {row['onnx_cuda']}")
+        log.info(f"ONNX node placement: {placement}")
+        log.info(f"ONNXRuntime GPU: {row['onnx_cuda']}")
         check_placement(placement, allow_cpu_fallback)
     else:
-        print("  ONNXRuntime GPU: skipped (no CUDA device, or CPU-only onnxruntime)")
+        log.info("ONNXRuntime GPU: skipped (no CUDA device, or CPU-only onnxruntime)")
 
     # The FP16 number is only useful as a ratio, and this repository's own
     # README says latency is reproducible within a session and not across them
@@ -982,15 +988,15 @@ def run_one(
         row["fp32_reference"]["interleaved"] = interleaved_speedup(
             cuda_core_runner(onnx_path, imgsz), cuda_core_runner(fp32_path, imgsz)
         )
-        print(f"  FP32 reference (same session): {reference['core']}")
-        print(
-            f"  FP16 core speedup, interleaved: {row['fp32_reference']['interleaved']}"
+        log.info(f"FP32 reference (same session): {reference['core']}")
+        log.info(
+            f"FP16 core speedup, interleaved: {row['fp32_reference']['interleaved']}"
         )
 
     # Last: the CPU run leaves the GPU idle for ~20 s, and nothing measured on
     # the GPU should come after that gap and be compared with what came before.
     row["onnx_cpu"] = bench_onnx(onnx_path, imgsz, "CPUExecutionProvider")
-    print(f"  ONNXRuntime CPU: {row['onnx_cpu']}")
+    log.info(f"ONNXRuntime CPU: {row['onnx_cpu']}")
 
     row["environment"] = _environment(imgsz)
     return row
@@ -1067,6 +1073,11 @@ def main() -> None:
             "benchmark_fp16.json" if args.half else "benchmark.json"
         )
 
+    with logs.command("benchmark"):
+        _benchmark(args)
+
+
+def _benchmark(args) -> None:
     row = run_one(
         args.weights,
         args.imgsz,
@@ -1083,6 +1094,7 @@ def main() -> None:
     # above; this final guard also catches a broken latency measurement before
     # it can replace a previously valid report with a file other tools reject.
     args.out.write_text(json.dumps(row, indent=2, allow_nan=False))
+    log.info(f"report written: {logs.rel(args.out)}")
 
     def med(key: str, regime: str) -> str:
         v = row.get(key, {}).get(regime, {}).get("median_ms")

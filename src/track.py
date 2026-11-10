@@ -21,14 +21,16 @@ Usage
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import statistics
-import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+import logs
 
 # Read when ultralytics is imported, so set before anything can import it.
 # No run-time pip installs (lap is pinned in requirements.txt instead), and
@@ -47,6 +49,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # OpenCV in. The value is fixed by the OpenCV ABI.
 CAP_PROP_FPS = 5
 REPORTS_DIR = PROJECT_ROOT / "reports"
+
+log = logging.getLogger("aerial.track")
 
 # Colours are per-track, not per-class, because the thing being communicated in
 # a tracking overlay is identity persistence.
@@ -315,11 +319,10 @@ def check_source_matches_record(source: Path, allow_mismatch: bool = False) -> b
             f"--source at the clip that record describes, or delete the record."
         )
     if allow_mismatch:
-        print(
-            f"[warn] {source.name} does not match its provenance record "
+        log.warning(
+            f"{source.name} does not match its provenance record "
             f"({actual[:16]}... vs {expected}). Continuing because "
-            f"--allow-source-mismatch was passed; the report will say so.",
-            file=sys.stderr,
+            f"--allow-source-mismatch was passed; the report will say so."
         )
         return False
     raise SystemExit(
@@ -469,10 +472,9 @@ def frame_source(source: Path):
                 continue
             yield img, None, None
         if skipped:
-            print(
-                f"[warn] skipped {len(skipped)} undecodable image(s): "
-                f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}",
-                file=sys.stderr,
+            log.warning(
+                f"skipped {len(skipped)} undecodable image(s): "
+                f"{', '.join(skipped[:5])}{' ...' if len(skipped) > 5 else ''}"
             )
     else:
         cap = cv2.VideoCapture(str(source))
@@ -1030,6 +1032,11 @@ def main() -> None:
         # anything else failed later as an unopenable writer or an undecodable
         # file, pointing at the codec rather than the name.
         p.error(f"--out must end in .mp4, got {args.out.name}")
+    with logs.command("track"):
+        _track(args)
+
+
+def _track(args) -> None:
     protected_paths = {
         args.source.resolve(),
         args.weights.resolve(),
@@ -1191,6 +1198,13 @@ def main() -> None:
     # - `≥` under cp1252, which is what Windows gives a redirected stdout -
     # raised there, and the guard deleted a finished run's video and report.
     # The report is ASCII now as well, so it no longer fails at all.
+    log.info(
+        f"tracked {n_frames} frames in {wall:.1f} s, "
+        f"{report['end_to_end_fps']} FPS end-to-end"
+    )
+    log.info(f"report written: {logs.rel(out_json)}")
+    if writer is not None:
+        log.info(f"video written: {logs.rel(args.out)}")
     print_report(report, n_frames, wall)
     print(f"\n  metrics -> {out_json}")
     if writer is not None:

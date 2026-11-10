@@ -60,6 +60,14 @@ with the digest.
 
 [Training, evaluation and tracking commands](docs/DESIGN.md#usage).
 
+Every script appends to `runs/aerial.log` (not committed): the command line it
+was started with, how it ended (done, stopped with a message, interrupted or
+failed with its traceback) and how long it took, with UTC times.
+`grep -E "WARNING|ERROR" runs/aerial.log` finds every warning and every run
+that did not finish. The same lines go to stderr, so redirecting stdout still
+captures only the result tables. Set `AERIAL_LOG_FILE` to move the log; the
+container image points it at `/out/aerial.log`.
+
 ## Tests
 
 ```bash

@@ -106,6 +106,10 @@ ENV YOLO_AUTOINSTALL=false
 # Load checkpoints with torch's weights_only unpickler. Ultralytics defaults to
 # full pickle, under which a tampered .pt executes code as it loads.
 ENV ULTRALYTICS_SAFE_LOAD=1
+# The run log (src/logs.py) defaults to runs/aerial.log under /workspace, which
+# `docker run --user` cannot write. /out is where the default command already
+# writes its report; without that mount the scripts say so once and carry on.
+ENV AERIAL_LOG_FILE=/out/aerial.log
 
 # A real default. `--help` as the CMD made `docker run <image>` a no-op that
 # proved only that Python starts - which is exactly the "Docker was added to
